@@ -21,3 +21,6 @@ models/
 *.pt
 *.pkl
 *.joblib
+
+# Rendered notebook (regenerate with: jupyter nbconvert --to html --embed-images)
+Climate_Time_Series_Analysis.html

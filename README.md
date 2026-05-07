@@ -12,6 +12,16 @@
 
 ---
 
+## 📓 Detailed Analysis
+
+> **A fully-executed Jupyter notebook accompanies this spec — 108 cells, 26 figures, end-to-end reproducible from the raw CSV.**
+>
+> **➡ [`Climate_Time_Series_Analysis.ipynb`](./Climate_Time_Series_Analysis.ipynb)**
+>
+> The notebook walks the entire pipeline: dedup + resample, exploratory analysis, time-series structural diagnostics (ADF/KPSS, ACF/PACF, decomposition, Welch periodogram), classical forecasting (ARIMA, SARIMA, Holt-Winters, baselines), and **PyTorch sequence modelling** (LSTM, 1D-CNN) on ten years of one-minute indoor sensor readings. Skip ahead to the [results section below](#analysis-notebook--climate_time_series_analysisipynb) for leaderboards and headline plots.
+
+---
+
 ## Overview
 
 ClimaSense is an end-to-end indoor climate intelligence platform built around six-plus years of real indoor temperature and humidity readings captured at five-minute intervals. It pairs an **ASP.NET Core** web application with a **Python FastAPI** machine learning microservice and **SQL Server 2022** time-series storage to turn raw sensor streams into forecasts, anomalies, behavioural clusters, and comfort scoring.
@@ -331,8 +341,7 @@ sequenceDiagram
 
 A self-contained, fully-executed Jupyter notebook accompanies the platform spec: **108 cells (60 markdown / 48 code)** that walk from raw CSV all the way through forecasting and sequence modelling, with every plot reproducible end-to-end.
 
-- 📓 Notebook source: [`Climate_Time_Series_Analysis.ipynb`](./Climate_Time_Series_Analysis.ipynb)
-- 🌐 Rendered HTML (with all outputs embedded): [`Climate_Time_Series_Analysis.html`](./Climate_Time_Series_Analysis.html)
+- 📓 Notebook source: [`Climate_Time_Series_Analysis.ipynb`](./Climate_Time_Series_Analysis.ipynb) — GitHub renders all 26 figures inline.
 
 The notebook is organised into four movements:
 
@@ -469,7 +478,7 @@ GET  /api/health
 
 | Phase | Focus | Deliverables |
 | --- | --- | --- |
-| ✅ Done | Time-series notebook | EDA + TSA + classical + sequence modelling, executed HTML, asset library |
+| ✅ Done | Time-series notebook | EDA + TSA + classical + sequence modelling, executed end-to-end, asset library |
 | Days 1–2 | Foundation | `docker-compose.yml`, `init-db.sql`, `import-data.sql`, verified time-series queries |
 | Days 3–4 | ASP.NET Core API | EF Core / Dapper wiring, readings endpoints, Swagger, gap-filling range endpoint |
 | Days 5–7 | Dashboard UI | Dark theme, Dashboard, Explorer, heatmap calendar, shared Plotly config |
