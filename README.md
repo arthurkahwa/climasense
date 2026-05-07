@@ -8,7 +8,7 @@
 ![ML](https://img.shields.io/badge/ML-scikit--learn%20%7C%20statsmodels-F7931E)
 ![Platform](https://img.shields.io/badge/platform-Docker%20Compose-2496ED)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Status](https://img.shields.io/badge/status-Planned-lightgrey)
+![Status](https://img.shields.io/badge/status-Notebook%20%E2%9C%93%20%7C%20Platform%20Planned-blue)
 
 ---
 
@@ -320,10 +320,121 @@ sequenceDiagram
 
 ## Data and Storage Notes
 
-- **Dataset:** ~6 years of real indoor readings, 5-minute cadence, ~630K rows per metric, available as CSV for bulk import.
+- **Dataset:** ~10 years of real indoor readings (2016-01-20 → 2026-05-07) at roughly one-minute cadence, ~3.07 M raw rows in CSV form. After deduplicating identical timestamps the working dataset is **2.45 M rows**, which resamples to **90,239 hourly slots** and **3,761 daily slots**.
 - **Raw table:** `SensorReadings` clustered on `ReadingTime` for sequential time-series scans; covering non-clustered indexes on `Temperature` and `Humidity`.
 - **Derived tables:** `Anomalies`, `Forecasts`, `DayClusters`, `ComfortScores` — each indexed on its relevant time column.
 - **Time-series SQL:** `DATE_BUCKET` for hourly/daily/weekly aggregation; `GENERATE_SERIES` plus `LAST_VALUE(... ) IGNORE NULLS` for gap filling across missing intervals.
+
+---
+
+## Analysis Notebook — `Climate_Time_Series_Analysis.ipynb`
+
+A self-contained, fully-executed Jupyter notebook accompanies the platform spec: **108 cells (60 markdown / 48 code)** that walk from raw CSV all the way through forecasting and sequence modelling, with every plot reproducible end-to-end.
+
+- 📓 Notebook source: [`Climate_Time_Series_Analysis.ipynb`](./Climate_Time_Series_Analysis.ipynb)
+- 🌐 Rendered HTML (with all outputs embedded): [`Climate_Time_Series_Analysis.html`](./Climate_Time_Series_Analysis.html)
+
+The notebook is organised into four movements:
+
+| § | Section | What's inside |
+| --- | --- | --- |
+| 5 | Exploratory Data Analysis | dtypes, summary stats, missing-data audit, distributions, joint T↔RH, hour×day-of-week heatmaps, monthly seasonality, yearly trend, IQR outlier check |
+| 6 | Time Series Analysis | rolling stats, ADF + KPSS stationarity tests, differencing, ACF/PACF, additive decomposition × 2 (24 h, 7 d), STL, Welch periodogram, T↔RH cross-correlation |
+| 7 | Classical Forecasting | 3 baselines, Holt-Winters, ARIMA(2,0,2), SARIMA(1,0,1)(1,0,1,24), 24 h vs 72 h horizons, residual diagnostics |
+| 8 | Sequence Modelling | lag + cyclical-calendar features, lag-LR, HistGradientBoosting (1-step + recursive), **PyTorch LSTM**, **1D-CNN**, hidden-state PCA visualisation |
+
+### Headline plots
+
+#### Coverage and rhythms
+
+![Hourly mean temperature and humidity across full coverage](./assets/fig_01_overview_full_coverage.png)
+
+The full ten-year hourly view shows a tightly controlled environment — temperature drifts in a narrow ~5 °C band, humidity in a wider ~30 % band — with a few clearly visible regime shifts (sensor relocations / HVAC changes).
+
+![Hour-of-day × day-of-week temperature heatmap](./assets/fig_04_hour_dow_heatmap.png) ![Joint temperature ↔ humidity distribution](./assets/fig_03_joint_T_RH.png)
+
+The heatmap surfaces a faint but real diurnal pattern; the joint distribution shows the expected negative T↔RH correlation but with broad scatter — the sensor sees a multi-modal "indoor weather" rather than a single steady state.
+
+![Monthly seasonality](./assets/fig_05_monthly_boxplot.png) ![Yearly trend](./assets/fig_06_yearly_trend.png)
+
+Monthly boxplots reveal a 1-2 °C swing between spring and autumn; the yearly mean is nearly flat — there is no strong long-term drift in this room.
+
+#### Time-series structure
+
+![Autocorrelation and partial autocorrelation](./assets/fig_08_acf_pacf.png)
+
+ACF decays slowly with a clear bump at lag 24 h; PACF cuts off after ~2 lags. Together these point at low-order ARMA terms with a daily seasonal component.
+
+![Seasonal decomposition (period = 24 h)](./assets/fig_09_seasonal_decompose_24.png) ![STL decomposition](./assets/fig_10_stl.png)
+
+Both the additive decomposition and the more robust STL agree: small daily seasonality (~0.5 °C peak-to-peak) sitting on a near-flat trend with most of the variance going to residuals — consistent with a controlled indoor environment.
+
+![Welch periodogram of hourly temperature](./assets/fig_11_periodogram.png)
+
+The periodogram confirms the dominant cycle at 1 cycle/day with a much weaker harmonic near 12 h.
+
+### Stationarity tests
+
+```
+--- Hourly temperature (n = 90,239) ---
+  ADF   stat = -9.517   p = 3.13e-16   →  stationary
+  KPSS  stat =  4.473   p = 0.01       →  non-stationary
+
+--- Hourly humidity   (n = 90,239) ---
+  ADF   stat = -4.980   p = 2.43e-05   →  stationary
+  KPSS  stat =  4.890   p = 0.01       →  non-stationary
+```
+
+The ADF/KPSS pair disagrees — a textbook *trend-stationary* signature. The series is mean-reverting around a slowly-moving level, which is exactly the regime where lag-feature linear models tend to thrive.
+
+### Classical forecasting — 14-day held-out test
+
+Last 14 days (336 hours) held out; train = 89,903 hours.
+
+| Model | MAE (°C) | RMSE (°C) | MAPE | sMAPE |
+| --- | ---: | ---: | ---: | ---: |
+| **Rolling 24h mean** | 0.248 | **0.320** | 1.314 | 1.313 |
+| Holt-Winters (additive, *m* = 24) | 0.247 | 0.346 | 1.314 | 1.310 |
+| Naive (last value) | **0.217** | 0.370 | **1.164** | **1.153** |
+| Seasonal naive (lag-24h) | 0.307 | 0.433 | 1.627 | 1.626 |
+| SARIMA(1,0,1)(1,0,1,24) | 0.344 | 0.442 | 1.836 | 1.814 |
+| ARIMA(2,0,2) | 0.571 | 0.649 | 3.005 | 3.063 |
+
+![Classical model comparison](./assets/fig_17_model_comparison.png)
+
+Headline finding: the simplest baselines (rolling 24h mean, naive, Holt-Winters) **beat** the heavier ARIMA/SARIMA fits on this signal, because indoor temperature has very low variance (σ ≈ 1.6 °C) and almost no genuine short-term predictability beyond persistence. This is exactly the kind of result that a lazy "ARIMA wins" narrative would obscure.
+
+![SARIMA forecast vs held-out test](./assets/fig_16_sarima_forecast.png) ![24h vs 72h horizon](./assets/fig_18_multi_horizon.png)
+
+The multi-horizon plot shows SARIMA's confidence band widening realistically — the model is honest about its growing uncertainty, even if its point forecast is not the best on the leaderboard.
+
+![Residual diagnostics (best model)](./assets/fig_19_residual_diagnostics.png)
+
+### Sequence modelling — same test horizon, expanded model family
+
+| Model | MAE (°C) | RMSE (°C) |
+| --- | ---: | ---: |
+| **Linear regression on lag features** | **0.214** | **0.293** |
+| Gradient boosting (1-step) | 0.215 | 0.305 |
+| LSTM (PyTorch) | 0.248 | 0.314 |
+| 1D-CNN (PyTorch) | 0.266 | 0.340 |
+| Gradient boosting (recursive) | 0.522 | 0.596 |
+
+![Sequence-model comparison](./assets/fig_25_sequence_comparison.png)
+
+A plain **linear regression on 8 lag terms + cyclical hour/dow encodings** (`sin`/`cos`) ties or beats every neural model on this signal. The LSTM and 1D-CNN are perfectly competent — they just don't have anything extra to learn once persistence and seasonality are encoded as features. The recursive gradient booster collapses because of error compounding over 336 steps.
+
+![LSTM training loss](./assets/fig_22_lstm_training_loss.png) ![LSTM forecast vs test](./assets/fig_23_lstm_forecast.png) ![Recursive multi-step forecast](./assets/fig_24_recursive_multistep.png)
+
+![Hidden-state PCA — daily LSTM embeddings coloured by day-of-week](./assets/fig_26_hidden_pca.png)
+
+Projecting the LSTM's last hidden state per day into 2-D with PCA shows weekday/weekend overlap — there is no obvious "warm weekday vs cool weekend" cluster, mirroring what the EDA already hinted at.
+
+### Forecasting takeaways
+
+- For this signal, the right deployment is the **simplest model that captures persistence + a daily cycle** — the lag-LR or rolling baseline, both retrainable in seconds.
+- The notebook's value is mainly **methodological**: it documents *why* a heavier model isn't justified here, with reproducible evidence at each step.
+- Material gains will require **exogenous regressors** — outdoor weather, occupancy, HVAC mode — which the README's Status / Roadmap section already calls out.
 
 ---
 
@@ -354,10 +465,11 @@ GET  /api/health
 
 ## Status and Roadmap
 
-**Current status:** Planned / specification stage. No code committed yet.
+**Current status:** Analysis notebook is complete and reproducible end-to-end (`Climate_Time_Series_Analysis.ipynb` + rendered HTML, 26 figures, 4 model leaderboards). Platform implementation (.NET web tier, FastAPI ML service, SQL Server, Docker Compose) is still in the specification stage.
 
 | Phase | Focus | Deliverables |
 | --- | --- | --- |
+| ✅ Done | Time-series notebook | EDA + TSA + classical + sequence modelling, executed HTML, asset library |
 | Days 1–2 | Foundation | `docker-compose.yml`, `init-db.sql`, `import-data.sql`, verified time-series queries |
 | Days 3–4 | ASP.NET Core API | EF Core / Dapper wiring, readings endpoints, Swagger, gap-filling range endpoint |
 | Days 5–7 | Dashboard UI | Dark theme, Dashboard, Explorer, heatmap calendar, shared Plotly config |

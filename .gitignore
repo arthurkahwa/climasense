@@ -1,0 +1,23 @@
+# Data — too large for git, fetched separately
+sensor_data.csv
+data/
+
+# Build artefacts for the notebook
+.build_cells/
+
+# IDE
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# Models (often heavy artefacts)
+models/
+*.pt
+*.pkl
+*.joblib
