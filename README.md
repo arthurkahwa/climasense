@@ -24,9 +24,9 @@
 
 ## Overview
 
-ClimaSense is an end-to-end indoor climate intelligence platform built around six-plus years of real indoor temperature and humidity readings captured at five-minute intervals. It pairs an **ASP.NET Core** web application with a **Python FastAPI** machine learning microservice and **SQL Server 2022** time-series storage to turn raw sensor streams into forecasts, anomalies, behavioural clusters, and comfort scoring.
+ClimaSense is an end-to-end indoor climate intelligence platform built around six-plus years of real indoor temperature and humidity readings captured at five-minute intervals. It pairs an **ASP.NET Core** web application with a **Python FastAPI** machine learning microservice and **SQL Server 2022** time-series storage to turn raw sensor streams into evidence-driven forecasts, type-aware anomaly classification, calendar-conditioned daily profiles, and ASHRAE 55 comfort scoring.
 
-The project targets freelance reviewers, engineering leaders, and decision-makers at startups, SMBs, enterprises, and agencies. It demonstrates full-stack ownership across data ingestion, time-series SQL, REST-based polyglot architecture, machine learning, and dark-themed Plotly.js dashboards — all runnable with a single `docker compose up`.
+The project targets freelance reviewers, engineering leaders, and decision-makers at startups, SMBs, enterprises, and agencies. It demonstrates full-stack ownership across data ingestion, time-series SQL, REST-based polyglot architecture, evidence-driven analytics with notebook receipts, and dark-themed Plotly.js dashboards — all runnable with a single `docker compose up`.
 
 ---
 
@@ -39,7 +39,7 @@ The project targets freelance reviewers, engineering leaders, and decision-maker
 | 24-hour sparklines | At-a-glance trend lines for both metrics |
 | Comfort zone indicators | Color-coded "too hot / ideal / too cold" bands |
 | Comfort score card | 0–100 ASHRAE-based rating with qualitative label |
-| Last anomaly | Most recent ML-flagged anomaly from the prior 24 hours |
+| Last anomaly | Most recent typed anomaly (sensor failure, regime shift, or residual outlier) from the prior 24 hours |
 
 ### Historical Explorer
 | Feature | Description |
@@ -50,21 +50,20 @@ The project targets freelance reviewers, engineering leaders, and decision-maker
 | Min/Max bands | Overlayed envelope on aggregated series |
 | Heatmap calendar | GitHub-contribution-style daily temperature intensity view |
 
-### AI / ML Analysis
+### Models and Analytics
 | Feature | Technique | Outcome |
 | --- | --- | --- |
-| Forecasting | ARIMA | 24–72 hour predictions with confidence bands |
-| Anomaly detection | Isolation Forest | Severity-scored markers with drill-down details |
-| Pattern clustering | K-Means | Labeled daily profiles (e.g. "warm weekday", "cool weekend") |
-| Comfort scoring | ASHRAE heuristic | Hourly 0–100 comfort index trended over time |
+| Forecasting | Lag-LR (linear regression on 8 lags + sin/cos hour/dow) behind `IForecaster` | 24–72 hour predictions with notebook-seeded leaderboard alongside the live model |
+| Anomaly detection | Three-detector pipeline — SQL rules + PELT changepoint (`ruptures`) + lag-LR residual outliers | Type-aware markers (`sensor_failure` / `regime_shift` / `residual_outlier`) with severity meaningful within each type |
+| Pattern profiles | Calendar-conditioned z-scores over `(day_of_week, hour_of_day)` cohorts | Deterministic daily profile labels (`quiet` / `warm` / `cool` / `volatile`) from a SQL CASE expression |
+| Comfort scoring | ASHRAE 55-2020 graphical comfort zone (Figure 5.3.1, summer + winter polygons) | Hourly 0–100 comfort index with rating bands trended over time |
 
-### Alerts and Recommendations
+### Alerts and Comfort Budget
 | Feature | Description |
 | --- | --- |
 | Threshold rules | "Alert if temperature > X for Y minutes" configuration UI |
-| Alert history | Persisted log of prior threshold breaches |
-| Recommendations engine | Simulated HVAC optimization tips driven by historical clusters |
-| Cost narrative | Estimated energy/risk savings framed for decision-makers |
+| Alert history | Persisted breach intervals keyed by replay-clock time, delivered to open dashboards via SSE (`/api/alerts/stream`) |
+| Comfort Budget | Three deterministic SQL aggregations — hours outside zone (last 7 days), worst calendar cell from `DayProfiles`, and 7-day comfort trend sparkline |
 
 ---
 
@@ -76,11 +75,13 @@ The project targets freelance reviewers, engineering leaders, and decision-maker
 | HTTP API | ASP.NET Core Web API | REST endpoints for sensor and ML data |
 | Data access | Entity Framework Core / Dapper | Repository layer against SQL Server |
 | Visualisation | Plotly.js (dark theme) | Interactive time-series, heatmap, and forecast charts |
-| Database | SQL Server 2022 | Time-series storage with `DATE_BUCKET`, `GENERATE_SERIES`, `IGNORE NULLS` |
+| Data source | Upstream MS SQL Server (read-only) | Production sensor readings, mirrored into ClimaSense by an ingestion job (SQLAlchemy + pyodbc) |
+| Database | SQL Server 2022 | ClimaSense's own time-series storage with `DATE_BUCKET`, `GENERATE_SERIES`, `IGNORE NULLS` |
 | ML runtime | Python 3 + FastAPI + Uvicorn | HTTP microservice for model training and inference |
-| ML libraries | scikit-learn, statsmodels | Isolation Forest, K-Means, ARIMA |
+| ML libraries | scikit-learn (lag-LR), statsmodels (notebook only), ruptures (PELT changepoint detection) | Production forecaster, notebook leaderboard, regime-shift detector |
 | Data tooling | pandas, numpy, SQLAlchemy, pyodbc | Data shaping and DB I/O inside the ML service |
-| Scheduling | APScheduler | Hourly forecast refresh, nightly clustering and anomaly sweeps |
+| Scheduling | APScheduler | Hourly forecast refresh, nightly anomaly sweeps and profile recomputation |
+| Alert delivery | Server-Sent Events (`EventSource` / ASP.NET SSE) | Browser-only live notification of new breach intervals |
 | Orchestration | Docker Compose | One-command boot of DB, web, and ML containers |
 | Interop | REST over HTTP (JSON) | Contracts between .NET and Python services |
 
@@ -88,23 +89,30 @@ The project targets freelance reviewers, engineering leaders, and decision-maker
 
 ## Architecture
 
-ClimaSense follows a **three-tier, polyglot, containerised** design. The ASP.NET Core web tier serves pages and proxies ML calls. The Python FastAPI tier owns model training, inference, and persistence of derived results. SQL Server is the single source of truth for both raw readings and ML-derived tables, with indexed time-series access patterns.
+ClimaSense follows a **three-tier, polyglot, containerised** design. The ASP.NET Core web tier serves pages, proxies ML calls, and pushes alert events over SSE. The Python FastAPI tier owns model training, inference, ingestion, and persistence of derived results. Raw sensor readings live in an upstream MS SQL Server owned by the data producer; ClimaSense's own SQL Server 2022 instance mirrors them via a scheduled ingestion job and stores all derived tables, with indexed time-series access patterns. Every layer that needs the current time goes through an `IClock` abstraction so demos can run deterministically against historical data without touching `DateTime.UtcNow`.
 
-Both services connect to the database directly — the .NET side reads sensor data and ML results for rendering, while the Python side reads raw readings and writes forecasts, anomalies, clusters, and comfort scores. Synchronous REST is used only for on-demand "Run Analysis" flows; scheduled jobs inside the Python container operate autonomously via APScheduler.
+Both services connect to the database directly — the .NET side reads sensor data and derived results for rendering, while the Python side reads raw readings and writes forecasts, anomalies, profiles, and comfort scores. Synchronous REST is used only for on-demand "Run Analysis" flows; scheduled jobs inside the Python container operate autonomously via APScheduler against the active clock.
 
 ```mermaid
 graph TD
     Browser["Browser (Plotly.js, Razor Pages)"]
-    Web["ASP.NET Core Web App<br/>Razor Pages + Web API"]
-    ML["Python FastAPI<br/>ML Microservice"]
+    Web["ASP.NET Core Web App<br/>Razor Pages + Web API + SSE"]
+    ML["Python FastAPI<br/>ML Microservice + Ingestion"]
     Sched["APScheduler<br/>(in-process)"]
-    DB[("SQL Server 2022<br/>SensorReadings, Anomalies,<br/>Forecasts, DayClusters, ComfortScores")]
+    Clock["IClock<br/>(WallClock | ReplayClock)"]
+    DB[("SQL Server 2022<br/>SensorReadings, Anomalies,<br/>Forecasts, DayProfiles, ComfortScores,<br/>AlertRules, Alerts")]
+    Upstream[("Upstream MS SQL Server<br/>(sensor producer, read-only)")]
 
     Browser -->|HTTPS| Web
     Web -->|EF Core / Dapper| DB
     Web -->|HTTP JSON| ML
+    Web -->|SSE: /api/alerts/stream| Browser
     ML -->|SQLAlchemy + pyodbc| DB
-    Sched -.->|hourly / nightly| ML
+    ML -->|SQLAlchemy + pyodbc<br/>read-only ingest| Upstream
+    Sched -.->|hourly / nightly / per-minute ingest| ML
+    Web -.->|reads| Clock
+    ML -.->|reads| Clock
+    Sched -.->|reads| Clock
 
     subgraph Docker_Compose
         Web
@@ -117,7 +125,21 @@ graph TD
 
 - **Read path (dashboard / explorer):** Browser hits Razor Pages, which call the ASP.NET Web API, which queries SQL Server using time-bucketed SQL and streams JSON back to Plotly.js.
 - **ML on-demand path:** Browser triggers `POST /api/ml/run/{type}` on the .NET side, which proxies to the FastAPI endpoint, which trains/infers, persists, and returns results.
-- **ML scheduled path:** APScheduler inside the FastAPI container runs forecasts hourly and clustering/anomaly detection nightly, writing straight to SQL Server.
+- **Ingestion path:** APScheduler runs an ingestion job every minute that pulls new rows (`ReadingTime > MAX(ReadingTime)`) from the upstream MS SQL Server into ClimaSense's `SensorReadings` table. Initial load is an idempotent full mirror keyed on `(ReadingTime)`. Read-only credentials; no writes to upstream.
+- **ML scheduled path:** APScheduler inside the FastAPI container runs forecasts hourly and anomaly detection / profile refresh nightly against `IClock.Now()`, writing straight to SQL Server.
+- **Alert delivery path:** ASP.NET evaluates threshold rules each tick, persists new breach intervals as `Alerts` rows, and pushes `breach-detected` events to open dashboards over `/api/alerts/stream` (SSE). Browser-only delivery; integration with email / SMS / push is intentionally out of scope.
+
+### Replay Clock
+
+ClimaSense ships in **Replay mode**: a virtual cursor advances through the mirrored history in ClimaSense's own SQL Server at a configurable speed (default 60×). Every "now" call in both the .NET and Python services routes through `IClock` — APScheduler triggers, EF Core default-value generators, latest-reading queries, threshold-alert evaluation, and SSE timestamps all consult the active clock. SQL queries use parameterised `@as_of_time` rather than `GETUTCDATE()`. A demo controls panel exposes pause / resume / seek and the speed multiplier; switching to `WallClock` for a future live deployment requires no code changes outside the clock binding.
+
+---
+
+## Scope
+
+> **Scope:** ClimaSense is a single-zone analytical tool driven by one sensor's history. Multi-sensor / multi-zone support is intentionally out of scope; the schema and queries assume one logical environment.
+
+The schema is free of `LocationId` / `SensorId` / `ZoneId` columns. Future multi-zone support is a textbook migration — `ALTER TABLE ADD COLUMN LocationId INT NOT NULL DEFAULT 1`, FK + index, parameter threaded through queries — deferred until needed.
 
 ---
 
@@ -133,38 +155,48 @@ ClimaSense/
 │   ├── ClimaSense.Web/                # ASP.NET Core Razor Pages + Web API
 │   │   ├── Program.cs
 │   │   ├── appsettings.json
-│   │   ├── Controllers/               # Readings, Anomalies, Forecasts, Clusters, Comfort
-│   │   ├── Services/                  # SensorDataService, MLServiceClient
+│   │   ├── Controllers/               # Readings, Anomalies, Forecasts, Profiles, Comfort, Alerts, Clock
+│   │   ├── Services/
+│   │   │   ├── SensorDataService.cs
+│   │   │   ├── MLServiceClient.cs
+│   │   │   ├── Clock/
+│   │   │   │   ├── IClock.cs          # DateTime Now() abstraction
+│   │   │   │   ├── WallClock.cs       # Production-default future
+│   │   │   │   └── ReplayClock.cs     # Virtual cursor (default 60×)
+│   │   │   └── Sse/
+│   │   │       └── AlertStream.cs     # SSE endpoint for breach-detected events
 │   │   ├── Repositories/              # Per-entity repositories over EF/Dapper
-│   │   ├── Models/                    # SensorReading, Anomaly, Forecast, DayCluster, ComfortScore
+│   │   ├── Models/                    # SensorReading, Anomaly, Forecast, DayProfile, ComfortScore, AlertRule, Alert
 │   │   ├── Data/
 │   │   │   └── ClimaSenseDbContext.cs
-│   │   ├── Pages/                     # Index (Dashboard), Explorer, Analysis, Alerts
+│   │   ├── Pages/                     # Index (Dashboard), Explorer, Analysis, Alerts, Comfort Budget
 │   │   └── wwwroot/
 │   │       ├── css/site.css
-│   │       └── js/                    # dashboard.js, explorer.js, analysis.js, plotly-config.js
+│   │       └── js/                    # dashboard.js, explorer.js, analysis.js, alerts-sse.js, plotly-config.js
 │   │
 │   └── ClimaSense.ML/                 # Python FastAPI ML service
 │       ├── main.py                    # FastAPI app + endpoints
 │       ├── config.py                  # Settings, DB URL
 │       ├── database.py                # SQLAlchemy engine + session
+│       ├── clock.py                   # IClock protocol, WallClock, ReplayClock
+│       ├── replay.py                  # Virtual cursor advancement against the CSV
 │       ├── models/
-│       │   ├── forecaster.py          # ARIMA
-│       │   ├── anomaly_detector.py    # Isolation Forest
-│       │   ├── clusterer.py           # K-Means on daily profiles
-│       │   └── comfort.py             # ASHRAE comfort index
+│       │   ├── forecaster.py          # IForecaster + LagLinearForecaster (production) + 4 stubs
+│       │   ├── anomaly_strategies.py  # IAnomalyStrategy + 3 strategies: SensorFailureRules, ChangepointDetector, ResidualOutlierDetector
+│       │   └── comfort.py             # ASHRAE 55 graphical comfort zone (summer + winter polygons)
 │       ├── schemas/                   # Pydantic request/response models
 │       ├── services/
 │       │   ├── data_service.py        # Reads from SensorReadings
-│       │   └── persistence_service.py # Writes ML results
-│       └── scheduler.py               # APScheduler jobs
+│       │   ├── ingestion_service.py   # Pulls from upstream MS SQL Server → SensorReadings (read-only)
+│       │   ├── profiles_service.py    # SQL-driven calendar-conditioned z-scores → DayProfiles
+│       │   └── persistence_service.py # Writes derived results
+│       └── scheduler.py               # APScheduler jobs (consult IClock)
 │
 ├── data/
-│   └── sensor_readings.csv            # ~630K rows per metric, 2019→present
+│   └── sensor_readings.csv            # Notebook fixture only — platform reads from upstream SQL Server
 │
 └── scripts/
-    ├── init-db.sql                    # Schema + indexes
-    └── import-data.sql                # Bulk CSV import
+    └── init-db.sql                    # Schema + indexes
 ```
 
 ### Class / module diagram
@@ -181,10 +213,17 @@ classDiagram
     class Anomaly {
         +int Id
         +DateTime ReadingTime
-        +string AnomalyType
+        +AnomalyType AnomalyType
         +string Severity
         +decimal Score
         +string Description
+    }
+
+    class AnomalyType {
+        <<enum>>
+        sensor_failure
+        regime_shift
+        residual_outlier
     }
 
     class Forecast {
@@ -197,11 +236,12 @@ classDiagram
         +decimal ConfidenceUpperTemp
     }
 
-    class DayCluster {
+    class DayProfile {
         +int Id
-        +DateTime ClusterDate
-        +string ClusterLabel
-        +int ClusterId
+        +DateTime Date
+        +int DayOfWeek
+        +decimal MeanResidual
+        +decimal MaxAbsZscore
         +string Pattern
     }
 
@@ -210,6 +250,25 @@ classDiagram
         +DateTime BucketTime
         +decimal Score
         +string Rating
+    }
+
+    class AlertRule {
+        +int RuleId
+        +string Metric
+        +string Operator
+        +decimal Threshold
+        +int DurationMinutes
+        +bool Enabled
+        +DateTime CreatedAt
+    }
+
+    class Alert {
+        +int AlertId
+        +int RuleId
+        +DateTime BreachStart
+        +DateTime BreachEnd
+        +decimal PeakValue
+        +DateTime ReplayClockAtFire
     }
 
     class ISensorDataService {
@@ -223,45 +282,101 @@ classDiagram
         <<interface>>
         +RunForecast(hoursAhead) ForecastBatch
         +DetectAnomalies(start, end) List~Anomaly~
-        +AnalyzeClusters(start, end) List~DayCluster~
+        +AnalyzeProfiles(start, end) List~DayProfile~
         +GetComfortScore(hours) List~ComfortScore~
+    }
+
+    class IClock {
+        <<interface>>
+        +Now() DateTime
+    }
+    class WallClock
+    class ReplayClock {
+        +Pause()
+        +Resume()
+        +Seek(target)
+        +SetSpeed(multiplier)
     }
 
     class SensorDataService
     class MLServiceClient
     class ClimaSenseDbContext
+    class AlertStream {
+        +Subscribe() EventStream
+        +Emit(BreachEvent)
+    }
 
     ISensorDataService <|.. SensorDataService
     IMLServiceClient <|.. MLServiceClient
+    IClock <|.. WallClock
+    IClock <|.. ReplayClock
     SensorDataService --> ClimaSenseDbContext
+    SensorDataService ..> IClock
+    AlertStream ..> IClock
     MLServiceClient ..> Forecast : returns
     MLServiceClient ..> Anomaly : returns
-    MLServiceClient ..> DayCluster : returns
+    MLServiceClient ..> DayProfile : returns
     MLServiceClient ..> ComfortScore : returns
+    Anomaly --> AnomalyType
+    Alert --> AlertRule
     ClimaSenseDbContext --> SensorReading
     ClimaSenseDbContext --> Anomaly
     ClimaSenseDbContext --> Forecast
-    ClimaSenseDbContext --> DayCluster
+    ClimaSenseDbContext --> DayProfile
     ClimaSenseDbContext --> ComfortScore
+    ClimaSenseDbContext --> AlertRule
+    ClimaSenseDbContext --> Alert
 
-    class Forecaster {
-        <<Python>>
+    class IForecaster {
+        <<Python interface>>
         +fit(history)
-        +predict(hoursAhead) ForecastBatch
+        +predict(horizonHours) ForecastBatch
     }
-    class AnomalyDetector {
-        <<Python>>
+    class LagLinearForecaster {
+        <<Python — production>>
         +fit(history)
+        +predict(horizonHours) ForecastBatch
+    }
+    class ArimaForecaster {
+        <<Python — stub>>
+    }
+    class SarimaForecaster {
+        <<Python — stub>>
+    }
+    class LstmForecaster {
+        <<Python — stub>>
+    }
+    class RollingMeanForecaster {
+        <<Python — stub>>
+    }
+
+    IForecaster <|.. LagLinearForecaster
+    IForecaster <|.. ArimaForecaster
+    IForecaster <|.. SarimaForecaster
+    IForecaster <|.. LstmForecaster
+    IForecaster <|.. RollingMeanForecaster
+
+    class IAnomalyStrategy {
+        <<Python interface>>
         +detect(range) List~Anomaly~
     }
-    class Clusterer {
-        <<Python>>
-        +fit(dailyProfiles)
-        +label(range) List~DayCluster~
+    class SensorFailureRules {
+        <<Python — SQL window functions>>
     }
+    class ChangepointDetector {
+        <<Python — PELT via ruptures>>
+    }
+    class ResidualOutlierDetector {
+        <<Python — reuses LagLinearForecaster>>
+    }
+
+    IAnomalyStrategy <|.. SensorFailureRules
+    IAnomalyStrategy <|.. ChangepointDetector
+    IAnomalyStrategy <|.. ResidualOutlierDetector
+
     class ComfortCalculator {
-        <<Python>>
-        +score(temp, humidity) ComfortScore
+        <<Python — ASHRAE 55 graphical zone>>
+        +score(temp, humidity, season) ComfortScore
     }
 ```
 
@@ -276,36 +391,76 @@ sequenceDiagram
     participant U as User (Browser)
     participant W as ASP.NET Web App
     participant M as FastAPI ML Service
+    participant C as IClock
     participant D as SQL Server
 
     U->>W: Click "Run Forecast (72h)"
     W->>W: POST /api/ml/run/forecast
     W->>M: POST /api/forecast { hours_ahead: 72 }
-    M->>D: SELECT recent SensorReadings
+    M->>C: now()
+    C-->>M: as_of_time
+    M->>D: SELECT SensorReadings WHERE ReadingTime <= @as_of_time
     D-->>M: Training window rows
-    M->>M: Fit ARIMA + predict 72h
-    M->>D: INSERT into Forecasts (with ModelVersion)
+    M->>M: Fit lag-LR + predict 72h
+    M->>D: INSERT into Forecasts (ModelVersion = LagLinearForecaster)
     M-->>W: 200 OK [forecast rows + confidence bands]
     W-->>U: JSON for Plotly overlay
     U->>U: Render predicted line + CI bands on Explorer chart
 ```
 
-### Scheduled nightly anomaly detection
+### Scheduled nightly anomaly detection (three-detector pipeline)
 
 ```mermaid
 sequenceDiagram
     participant S as APScheduler
-    participant A as AnomalyDetector
+    participant C as IClock
+    participant R as SensorFailureRules
+    participant CP as ChangepointDetector
+    participant RO as ResidualOutlierDetector
+    participant F as LagLinearForecaster
     participant D as SQL Server
 
-    S->>A: Trigger nightly job (02:00)
-    A->>D: SELECT SensorReadings for prior 24h
-    D-->>A: Reading rows
-    A->>A: Score via Isolation Forest
-    A->>A: Classify severity (low/medium/high)
-    A->>D: INSERT flagged rows into Anomalies
-    D-->>A: OK
-    Note over A,D: Dashboard "Last anomaly" card reflects new rows on next load
+    S->>C: now()
+    C-->>S: as_of_time
+    S->>R: detect(prior 24h)
+    R->>D: SELECT readings, apply window functions (gaps, stuck values, range)
+    D-->>R: Failure rows
+    R->>D: INSERT Anomalies (AnomalyType = sensor_failure)
+
+    S->>CP: detect(prior 24h)
+    CP->>D: SELECT daily means
+    D-->>CP: Daily series
+    CP->>CP: PELT changepoint search (ruptures)
+    CP->>D: INSERT Anomalies (AnomalyType = regime_shift)
+
+    S->>RO: detect(prior 24h)
+    RO->>F: predict over prior 24h
+    F-->>RO: ŷ_t series
+    RO->>RO: severity = |y_t − ŷ_t| / rolling_σ
+    RO->>D: INSERT Anomalies (AnomalyType = residual_outlier)
+
+    Note over S,D: Each detector writes its own typed rows; dashboard "Last anomaly" card reflects new rows on next load
+```
+
+### Replay-cursor advance and threshold alert delivery
+
+```mermaid
+sequenceDiagram
+    participant RC as ReplayClock
+    participant W as ASP.NET Alert Engine
+    participant D as SQL Server
+    participant SSE as AlertStream (SSE)
+    participant B as Browser (EventSource)
+
+    RC->>RC: Tick (default 60× wall-time)
+    W->>RC: now()
+    RC-->>W: replay_now
+    W->>D: SELECT new breach intervals via window function (rule, started_at, ended_at)
+    D-->>W: New breaches (idempotent — one row per interval)
+    W->>D: INSERT Alerts (RuleId, BreachStart, BreachEnd, PeakValue, ReplayClockAtFire = replay_now)
+    W->>SSE: Emit breach-detected event
+    SSE-->>B: data: {alertId, ruleId, peakValue, replayClock}
+    B->>B: Toast + append to Alert history table
 ```
 
 ### Dashboard load — latest reading and comfort score
@@ -330,10 +485,10 @@ sequenceDiagram
 
 ## Data and Storage Notes
 
-- **Dataset:** ~10 years of real indoor readings (2016-01-20 → 2026-05-07) at roughly one-minute cadence, ~3.07 M raw rows in CSV form. After deduplicating identical timestamps the working dataset is **2.45 M rows**, which resamples to **90,239 hourly slots** and **3,761 daily slots**.
+- **Dataset:** ~10 years of real indoor readings (2016-01-20 → 2026-05-07) at roughly one-minute cadence, ~3.07 M raw rows. The platform pulls from an **upstream MS SQL Server** (read-only) into ClimaSense's own `SensorReadings` table via a per-minute ingestion job; the bundled `sensor_data.csv` is retained solely as a reproducible fixture for the notebook. After deduplicating identical timestamps the working dataset is **2.45 M rows**, which resamples to **90,239 hourly slots** and **3,761 daily slots**.
 - **Raw table:** `SensorReadings` clustered on `ReadingTime` for sequential time-series scans; covering non-clustered indexes on `Temperature` and `Humidity`.
-- **Derived tables:** `Anomalies`, `Forecasts`, `DayClusters`, `ComfortScores` — each indexed on its relevant time column.
-- **Time-series SQL:** `DATE_BUCKET` for hourly/daily/weekly aggregation; `GENERATE_SERIES` plus `LAST_VALUE(... ) IGNORE NULLS` for gap filling across missing intervals.
+- **Derived tables:** `Anomalies` (typed: `sensor_failure | regime_shift | residual_outlier`), `Forecasts` (with `ModelVersion`), `DayProfiles` (calendar-conditioned z-scores; `Pattern ∈ {quiet, warm, cool, volatile}`), `ComfortScores`, `AlertRules`, and `Alerts` (each row carries `ReplayClockAtFire` for explicit clock provenance) — each indexed on its relevant time column.
+- **Time-series SQL:** `DATE_BUCKET` for hourly/daily/weekly aggregation; `GENERATE_SERIES` plus `LAST_VALUE(... ) IGNORE NULLS` for gap filling across missing intervals. `DayProfiles` recomputation is a SQL-only refresh, not a scheduled model fit.
 
 ---
 
@@ -454,18 +609,22 @@ Projecting the LSTM's last hidden state per day into 2-D with PCA shows weekday/
 GET  /api/readings/latest
 GET  /api/readings/range?start&end&bucket=hour|day|week
 GET  /api/readings/heatmap?year=2024
-GET  /api/anomalies?start&end
+GET  /api/anomalies?start&end&type=sensor_failure|regime_shift|residual_outlier
 GET  /api/forecasts/latest
-GET  /api/clusters?start&end
+GET  /api/profiles?start&end
 GET  /api/comfort/current
-POST /api/ml/run/{forecast|anomalies|clusters|comfort}
+GET  /api/comfort/budget
+GET  /api/alerts/stream            (Server-Sent Events: breach-detected)
+GET  /api/clock                    (replay state — paused, speed, cursor)
+POST /api/clock                    (pause | resume | seek | speed)
+POST /api/ml/run/{forecast|anomalies|profiles|comfort}
 ```
 
 ### FastAPI
 ```
 POST /api/forecast              { hours_ahead }
 POST /api/anomalies/detect      { start_date, end_date }
-POST /api/clusters/analyze      { start_date, end_date }
+POST /api/profiles/analyze      { start_date, end_date }
 GET  /api/comfort/score?hours=24
 GET  /api/health
 ```
@@ -479,12 +638,17 @@ GET  /api/health
 | Phase | Focus | Deliverables |
 | --- | --- | --- |
 | ✅ Done | Time-series notebook | EDA + TSA + classical + sequence modelling, executed end-to-end, asset library |
-| Days 1–2 | Foundation | `docker-compose.yml`, `init-db.sql`, `import-data.sql`, verified time-series queries |
-| Days 3–4 | ASP.NET Core API | EF Core / Dapper wiring, readings endpoints, Swagger, gap-filling range endpoint |
-| Days 5–7 | Dashboard UI | Dark theme, Dashboard, Explorer, heatmap calendar, shared Plotly config |
-| Days 8–10 | ML service | FastAPI scaffold, ARIMA, Isolation Forest, K-Means, ASHRAE comfort, APScheduler |
-| Days 11–12 | ML into UI | Forecast overlay, anomaly markers, cluster view, comfort trend, "Run Analysis" |
-| Days 13–14 | Polish | Alerts page, recommendation cards, responsive tweaks, final README + demo walkthrough |
+| Days 1–2 | Foundation | `docker-compose.yml`, `init-db.sql`, upstream MS SQL Server connection + initial mirror, IClock skeleton |
+| Days 3–4 | ASP.NET API | EF Core, range / heatmap / latest endpoints |
+| Days 5–6 | Dashboard + Explorer | Read-only UI, dark theme, shared Plotly config |
+| Day 7 | FastAPI scaffold | `LagLinearForecaster` + `IForecaster` interface + persistence |
+| Day 8 | Comfort scoring | ASHRAE 55 graphical polygon + scheduled job + `ComfortScores` table |
+| Day 9 | Anomalies | Three-detector pipeline (rules + changepoint + residual) |
+| Day 10 | Profiles | Calendar-conditioned z-scores + `DayProfiles` SQL views |
+| Day 11 | Alerts | Threshold alert engine + SSE wiring + Alert history page |
+| Day 12 | Comfort Budget + Leaderboard | Comfort Budget panel + leaderboard UI seeded from notebook evaluation |
+| Day 13 | Replay Clock | Cursor + demo controls (pause / resume / seek / speed) + integration |
+| Day 14 | Polish | README rewrite, demo walkthrough |
 
 ---
 
@@ -493,9 +657,28 @@ GET  /api/health
 - Real data — 6+ years of actual 5-minute indoor sensor readings, not synthetic.
 - Polyglot architecture — .NET and Python cooperating via clean REST contracts.
 - SQL Server 2022 time-series features — `DATE_BUCKET`, `GENERATE_SERIES`, `IGNORE NULLS` gap filling.
-- Three distinct ML techniques — ARIMA forecasting, Isolation Forest anomaly detection, K-Means pattern clustering — plus an ASHRAE-based comfort index.
+- Evidence-driven model selection — production ships lag-LR (the empirical winner from the notebook); ARIMA / SARIMA / Holt-Winters / LSTM / 1D-CNN are evaluated on the same held-out test, with the receipts displayed in the Explorer leaderboard.
+- Type-aware anomaly detection — three detectors (SQL rules, PELT changepoint, residual outliers) emit typed rows, not opaque scores.
+- `IClock` abstraction — every "now" call goes through a clock interface so the entire pipeline (forecasts, anomalies, comfort, alerts) demos deterministically against historical data, with one-line switching to wall-clock for a future live deployment.
 - One-command stack — `docker compose up` boots database, web app, and ML service with healthchecks.
-- End-to-end ownership — schema design, ingestion, API, UI, ML pipelines, scheduling, and DevOps.
+- End-to-end ownership — schema design, ingestion, API, UI, analytics pipelines, scheduling, and DevOps.
+
+---
+
+## Architecture Decision Records
+
+Design decisions, including the ones that walked back the original spec, are recorded under [`docs/adr/`](./docs/adr/):
+
+- [ADR-0001](./docs/adr/0001-lag-lr-as-production-forecaster.md) — Lag-LR as the production forecaster (ARIMA dropped on evidence).
+- [ADR-0002](./docs/adr/0002-three-detector-anomaly-pipeline.md) — Three-detector anomaly pipeline (Isolation Forest dropped).
+- [ADR-0003](./docs/adr/0003-calendar-conditioned-profiles.md) — Calendar-conditioned profiles (K-Means clustering dropped).
+- [ADR-0004](./docs/adr/0004-replay-mode-with-iclock.md) — Replay mode with `IClock` abstraction.
+- [ADR-0005](./docs/adr/0005-ashrae-55-graphical-comfort-zone.md) — ASHRAE 55 graphical comfort zone (PMV/PPD rejected).
+- [ADR-0006](./docs/adr/0006-comfort-budget-panel.md) — Comfort Budget panel (recommendations engine dropped).
+- [ADR-0007](./docs/adr/0007-replay-clock-alerts-with-sse.md) — Threshold alerts on the replay clock, delivered via DB + SSE.
+- [ADR-0008](./docs/adr/0008-explicit-single-zone-scope.md) — Explicit single-zone scope.
+- [ADR-0009](./docs/adr/0009-tight-14-day-build-scope.md) — Tight 14-day build scope (one live forecaster, leaderboard from notebook).
+- [ADR-0010](./docs/adr/0010-upstream-sql-server-as-source-of-truth.md) — Sensor readings sourced from an upstream MS SQL Server (CSV import dropped).
 
 ---
 
