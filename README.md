@@ -8,7 +8,9 @@
 ![ML](https://img.shields.io/badge/ML-scikit--learn%20%7C%20statsmodels-F7931E)
 ![Platform](https://img.shields.io/badge/platform-Docker%20Compose-2496ED)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Status](https://img.shields.io/badge/status-Notebook%20%E2%9C%93%20%7C%20Platform%20Planned-blue)
+![Status](https://img.shields.io/badge/status-WIP-orange)
+
+> ⚠️ **Work in progress.** Only the analysis notebook is complete. The .NET web tier, FastAPI ML service, SQL Server schema, and Docker Compose stack are still in specification — APIs, code paths, and the directory layout described below are planned, not yet implemented. Expect breaking changes.
 
 ---
 
