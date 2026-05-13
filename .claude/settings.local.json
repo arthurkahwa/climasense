@@ -9,7 +9,12 @@
       "Bash(python3 *)",
       "Bash(curl -s -o /dev/null -w '%{http_code}\\\\n' -H 'X-API-Key: jobboerse-jobsuche' 'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs?was=iOS&wo=M%C3%BCnchen&umkreis=50&angebotsart=1&page=1&size=50')",
       "Bash(curl -s -H 'X-API-Key: jobboerse-jobsuche' 'https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs?was=iOS&wo=M%C3%BCnchen&umkreis=50&angebotsart=1&page=1&size=50')",
-      "WebFetch(domain:www.arbeitsagentur.de)"
+      "WebFetch(domain:www.arbeitsagentur.de)",
+      "Bash(git -C /Users/arthur/Developer/github/arthurkahwa/climasense status)",
+      "Bash(git -C /Users/arthur/Developer/github/arthurkahwa/climasense log --oneline -5)",
+      "Bash(git add *)",
+      "Bash(git -c commit.gpgsign=false commit -m ' *)",
+      "Bash(git push *)"
     ]
   }
 }

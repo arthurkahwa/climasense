@@ -1,0 +1,125 @@
+@page
+@model ClimaSense.Web.Pages.IndexModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ClimaSense — slice 1 placeholder</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 2rem;
+            line-height: 1.5;
+        }
+        h1 {
+            color: #58a6ff;
+            font-weight: 500;
+            margin-top: 0;
+        }
+        code, pre {
+            background: #161b22;
+            border-radius: 6px;
+            padding: 0.15rem 0.4rem;
+            color: #d2a8ff;
+        }
+        pre {
+            padding: 1rem;
+            overflow-x: auto;
+        }
+        .panel {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+        }
+        .heartbeat-counter {
+            font-size: 2rem;
+            font-weight: 600;
+            color: #56d364;
+        }
+        .heartbeat-meta {
+            color: #8b949e;
+            font-size: 0.9rem;
+        }
+        ul.legend {
+            color: #8b949e;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>ClimaSense — slice 1 foundation placeholder</h1>
+
+    <p>
+        This page proves the SSE plumbing works end-to-end. It subscribes to
+        <code>/api/alerts/stream</code> and counts <code>server-tick</code>
+        events. Slices 5+ replace this with the real dashboard.
+    </p>
+
+    <section class="panel">
+        <div class="heartbeat-counter" id="tick-count">0</div>
+        <div class="heartbeat-meta">
+            <span id="last-tick-ts">awaiting first heartbeat&hellip;</span>
+            &nbsp;|&nbsp;
+            <span id="conn-state">connecting&hellip;</span>
+        </div>
+    </section>
+
+    <section class="panel">
+        <strong>What slice 1 ships</strong>
+        <ul class="legend">
+            <li>SQL Server 2022 with the canonical schema applied
+                (<code>scripts/init-db.sql</code>).</li>
+            <li>FastAPI placeholder with <code>/api/health/{live,ready}</code>.</li>
+            <li>This .NET tier with the same two health probes, structured JSON
+                logs, an <code>X-Request-ID</code> middleware, and the
+                <code>AlertStream</code> SSE singleton.</li>
+            <li><code>CursorSnapshot</code> registered as a per-request
+                scoped DI service in both tiers.</li>
+        </ul>
+    </section>
+
+    <script>
+        (function () {
+            var counter = document.getElementById('tick-count');
+            var lastTick = document.getElementById('last-tick-ts');
+            var connState = document.getElementById('conn-state');
+            var ticks = 0;
+
+            var es = new EventSource('/api/alerts/stream');
+
+            es.addEventListener('open', function () {
+                connState.textContent = 'connected';
+            });
+
+            es.addEventListener('server-tick', function (ev) {
+                ticks += 1;
+                counter.textContent = ticks.toString();
+                try {
+                    var payload = JSON.parse(ev.data);
+                    lastTick.textContent = 'last tick: ' + payload.ts +
+                        ' (event id ' + ev.lastEventId + ')';
+                } catch (e) {
+                    lastTick.textContent = 'last tick: (unparseable payload)';
+                }
+            });
+
+            es.addEventListener('error', function () {
+                connState.textContent = 'reconnecting…';
+            });
+
+            window.addEventListener('beforeunload', function () {
+                try { es.close(); } catch (e) { /* ignore */ }
+            });
+        })();
+    </script>
+</body>
+</html>

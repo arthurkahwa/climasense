@@ -1,0 +1,111 @@
+# ClimaSense — cross-tier wire format (Slice 1 minimal surface).
+#
+# This file is the source of truth for the .NET ↔ Python contract.
+# Slice 1 only formalises the health endpoints; slices 7+ extend
+# this file with the ML run / ingestion / leaderboard surface.
+#
+# Camel-case JSON only. The .NET tier configures System.Text.Json with
+# JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases.
+
+openapi: 3.0.3
+info:
+  title: ClimaSense Platform API
+  version: 0.1.0-slice-1
+  description: |
+    Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
+    the ML tier (FastAPI) both honour this document. Each tier MUST mint
+    or accept an `X-Request-ID` header on every request and propagate it
+    via structured-log scope.
+
+servers:
+  - url: http://127.0.0.1:8080
+    description: web tier (host-published, localhost-only)
+  - url: http://ml:8000
+    description: ml tier (network-internal; reachable from web only)
+
+paths:
+  /api/health/live:
+    get:
+      summary: Liveness probe
+      description: Returns immediately with no dependency checks. The process is up.
+      operationId: getHealthLive
+      tags: [health]
+      responses:
+        "200":
+          description: Process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /api/health/ready:
+    get:
+      summary: Readiness probe
+      description: |
+        Returns 200 only when all critical dependencies are reachable
+        (database connectivity at minimum). Returns 503 during startup
+        or whenever a dependency is unreachable.
+      operationId: getHealthReady
+      tags: [health]
+      responses:
+        "200":
+          description: Service is ready to accept traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+        "503":
+          description: A dependency is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /api/alerts/stream:
+    get:
+      summary: Server-Sent Events stream
+      description: |
+        SSE channel registered at slice 1 with one event type:
+          - `server-tick` — heartbeat every ~15 s.
+        Slice 11 adds `breach-detected`; slice 13 adds `clock-changed`.
+        Subscribers are tracked in `AlertStream` (.NET singleton). Closing
+        the connection unsubscribes cleanly via `HttpContext.RequestAborted`.
+        `Last-Event-ID` reconnection is honoured.
+      operationId: getAlertsStream
+      tags: [sse]
+      responses:
+        "200":
+          description: SSE stream opened.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  Each event is `event: <type>\ndata: <json>\nid: <number>\n\n`.
+                  Slice 1 emits only `event: server-tick`.
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      additionalProperties: false
+      required: [status, service, ts]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unavailable]
+          description: Coarse-grained outcome.
+        service:
+          type: string
+          description: Logical name of the responding service (e.g. `web`, `ml`).
+          example: web
+        ts:
+          type: string
+          format: date-time
+          description: Server timestamp at which the probe was answered.
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+            enum: [ok, fail, skipped]
+          description: Per-dependency probe outcomes (db, ml, etc.).
