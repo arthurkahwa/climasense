@@ -41,28 +41,15 @@ public sealed class JsonStdoutFormatter : ConsoleFormatter
         var holder = new ScopeHolder();
         scopeProvider?.ForEachScope(static (scope, state) =>
         {
-            // ASP.NET's BeginScope variants surface both nullable and
-            // non-nullable KeyValuePair sequences; accept either.
-            switch (scope)
+            if (scope is IEnumerable<KeyValuePair<string, object?>> kvps)
             {
-                case IEnumerable<KeyValuePair<string, object>> kvps:
-                    foreach (var kvp in kvps)
+                foreach (var kvp in kvps)
+                {
+                    if (string.Equals(kvp.Key, RequestIdMiddleware.LogScopeKey, StringComparison.Ordinal))
                     {
-                        if (string.Equals(kvp.Key, RequestIdMiddleware.LogScopeKey, StringComparison.Ordinal))
-                        {
-                            state.RequestId = kvp.Value?.ToString();
-                        }
+                        state.RequestId = kvp.Value?.ToString();
                     }
-                    break;
-                case IEnumerable<KeyValuePair<string, object?>> kvpsNullable:
-                    foreach (var kvp in kvpsNullable)
-                    {
-                        if (string.Equals(kvp.Key, RequestIdMiddleware.LogScopeKey, StringComparison.Ordinal))
-                        {
-                            state.RequestId = kvp.Value?.ToString();
-                        }
-                    }
-                    break;
+                }
             }
         }, holder);
 
