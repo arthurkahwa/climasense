@@ -46,4 +46,4 @@ COPY climasense_ml ./climasense_ml
 ENV PATH="/opt/venv/bin:$PATH"
 EXPOSE 8000
 
-CMD ["uvicorn", "climasense_ml.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-config", "/dev/null"]
+CMD ["uvicorn", "climasense_ml.main:app", "--host", "0.0.0.0", "--port", "8000"]
