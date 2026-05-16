@@ -8,9 +8,8 @@
 #          works without a fat shell.
 
 ARG DOTNET_VERSION=10.0
-ARG DOTNET_VARIANT=preview
 
-FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION}-${DOTNET_VARIANT} AS build
+FROM mcr.microsoft.com/dotnet/sdk:${DOTNET_VERSION} AS build
 WORKDIR /src
 
 COPY ClimaSense.Web.csproj ./
@@ -23,14 +22,18 @@ RUN dotnet publish ClimaSense.Web.csproj \
     --no-restore \
     /p:UseAppHost=false
 
-FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION}-${DOTNET_VARIANT} AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:${DOTNET_VERSION} AS runtime
 WORKDIR /app
 
 # Healthcheck dependency. `tini` provides PID 1 signal forwarding so
-# `docker stop` is clean.
+# `docker stop` is clean. `libicu-dev` provides ICU so SqlClient can open
+# connections (the default .NET 10 ASP.NET runtime image ships in invariant
+# globalization mode, which SqlClient rejects).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl tini \
+    && apt-get install -y --no-install-recommends curl tini libicu-dev \
     && rm -rf /var/lib/apt/lists/*
+
+ENV DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=false
 
 COPY --from=build /app/publish ./
 

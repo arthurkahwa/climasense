@@ -7,7 +7,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>ClimaSense.Web</RootNamespace>
     <AssemblyName>ClimaSense.Web</AssemblyName>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Microsoft.Data.SqlClient does not run under invariant globalization; -->
+    <!-- the runtime image installs libicu-dev to back the locale lookups. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
