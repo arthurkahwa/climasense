@@ -68,7 +68,10 @@ services:
 
   ml:
     build:
-      context: ./src/ClimaSense.ML
+      # The build context is the repo root so the Dockerfile can COPY
+      # `contracts/openapi.yaml` for codegen + `ContractValidator`.
+      context: .
+      dockerfile: src/ClimaSense.ML/Dockerfile
     container_name: climasense-ml
     env_file:
       - .env

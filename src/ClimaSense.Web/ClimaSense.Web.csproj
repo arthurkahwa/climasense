@@ -10,10 +10,60 @@
     <!-- Microsoft.Data.SqlClient does not run under invariant globalization; -->
     <!-- the runtime image installs libicu-dev to back the locale lookups. -->
     <InvariantGlobalization>false</InvariantGlobalization>
+
+    <!-- Slice 2: codegen integration.
+         When true (default), the BeforeBuild target invokes Kiota to
+         regenerate the .NET client from contracts/openapi.yaml. CI
+         sets this to false on cold checkouts where Kiota isn't yet
+         restored; the committed snapshot under Generated/ is then
+         used as-is. -->
+    <RegenerateKiotaClient Condition="'$(RegenerateKiotaClient)' == ''">true</RegenerateKiotaClient>
+    <ContractPath>$(MSBuildThisFileDirectory)..\..\contracts\openapi.yaml</ContractPath>
+    <KiotaOutputDir>$(MSBuildThisFileDirectory)Generated\MLClient</KiotaOutputDir>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.1" />
+
+    <!-- Kiota runtime packages — consumed by the generated client in
+         Generated/MLClient/. Versions tracked alongside the CLI in
+         .config/dotnet-tools.json. -->
+    <PackageReference Include="Microsoft.Kiota.Abstractions" Version="1.22.2" />
+    <PackageReference Include="Microsoft.Kiota.Http.HttpClientLibrary" Version="1.22.2" />
+    <PackageReference Include="Microsoft.Kiota.Serialization.Json" Version="1.22.2" />
+    <PackageReference Include="Microsoft.Kiota.Serialization.Text" Version="1.22.2" />
+    <PackageReference Include="Microsoft.Kiota.Serialization.Form" Version="1.22.2" />
+    <PackageReference Include="Microsoft.Kiota.Serialization.Multipart" Version="1.22.2" />
   </ItemGroup>
+
+  <!-- KiotaRegenerate — runs `dotnet kiota generate` before each build
+       so the .NET client in Generated/MLClient stays in lock-step with
+       contracts/openapi.yaml. The committed snapshot is then a true
+       cache: re-running the target is a no-op when the contract is
+       unchanged.
+
+       Conditional execution semantics:
+         * Skipped when $(RegenerateKiotaClient) is false (CI cold path).
+         * Skipped when Kiota isn't restored as a local tool — we DO
+           NOT fail the build, because slice 2 ships the snapshot.
+           A warning is emitted so the absence is visible in logs.
+         * The Kiota invocation lives in scripts/regen-contracts.sh
+           (canonical) — this target shells out to it so there is
+           exactly one definition of the Kiota CLI flags. -->
+  <Target Name="KiotaRegenerate"
+          BeforeTargets="BeforeBuild"
+          Condition="'$(RegenerateKiotaClient)' == 'true'">
+    <Exec Command="dotnet kiota --version"
+          ContinueOnError="true"
+          IgnoreExitCode="true"
+          ConsoleToMSBuild="true">
+      <Output TaskParameter="ExitCode" PropertyName="_KiotaCheckExit" />
+    </Exec>
+    <Warning Text="Kiota not installed; skipping .NET client regen. Run 'dotnet tool restore' to enable."
+             Condition="'$(_KiotaCheckExit)' != '0'" />
+    <Exec Command="bash &quot;$(MSBuildThisFileDirectory)..\..\scripts\regen-contracts.sh&quot; dotnet"
+          Condition="'$(_KiotaCheckExit)' == '0' AND Exists('$(ContractPath)')"
+          ConsoleToMSBuild="true" />
+  </Target>
 
 </Project>

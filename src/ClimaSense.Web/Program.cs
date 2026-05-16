@@ -3,6 +3,7 @@ using System.Text.Json;
 using ClimaSense.Web.Clock;
 using ClimaSense.Web.Cursor;
 using ClimaSense.Web.Logging;
+using ClimaSense.Web.ML;
 using ClimaSense.Web.Sse;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Data.SqlClient;
@@ -53,6 +54,34 @@ builder.Services.AddSingleton<AlertStream>();
 builder.Services.AddHostedService<HeartbeatService>();
 
 // ---------------------------------------------------------------------
+// ML tier client: HttpClientFactory pipeline with the two delegating
+// handlers (X-Request-ID propagation + failure mapping) on the
+// transport. Per the slice-2 contract:
+//   * Default per-request timeout: 30 s.
+//   * Anomalies/detect overrides to 60 s at the call site.
+//   * No automatic retries.
+//
+// `HttpClient.Timeout` is set conservatively at 90 s (the upper bound
+// across both call sites + DelegatingHandler overhead) — the actual
+// bounded timeout is enforced per-call via a linked CancellationToken
+// inside `MLServiceClient`. This is the canonical pattern in .NET 10
+// because HttpClient.Timeout cannot be varied per request.
+// ---------------------------------------------------------------------
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddTransient<RequestIdPropagationHandler>();
+builder.Services.AddTransient<MLFailureMappingHandler>();
+
+builder.Services
+    .AddHttpClient<IMLServiceClient, MLServiceClient>(http =>
+    {
+        var baseUrl = builder.Configuration["CLIMASENSE_ML_BASE_URL"] ?? "http://ml:8000";
+        http.BaseAddress = new Uri(baseUrl, UriKind.Absolute);
+        http.Timeout = TimeSpan.FromSeconds(90);  // outer envelope; per-call timeout is tighter.
+    })
+    .AddHttpMessageHandler<RequestIdPropagationHandler>()
+    .AddHttpMessageHandler<MLFailureMappingHandler>();
+
+// ---------------------------------------------------------------------
 // Razor Pages — single placeholder Index page.
 // ---------------------------------------------------------------------
 builder.Services.AddRazorPages();
@@ -65,6 +94,12 @@ var app = builder.Build();
 app.UseMiddleware<RequestIdMiddleware>();
 app.UseStaticFiles();
 app.MapRazorPages();
+
+// ml-tier proxy endpoints (slice 2). Demonstrate the failure-mapping
+// pipeline — 503 / 502 / 504 with a ProblemDetails body and no Python
+// traceback. The slice-2 ml tier returns 501 for every contract
+// endpoint, so a successful call here surfaces as 501 to the browser.
+app.MapMLProxy();
 
 // Liveness — process up.
 app.MapGet("/api/health/live", (HttpContext ctx, IClock clock) =>

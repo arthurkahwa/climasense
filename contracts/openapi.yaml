@@ -1,21 +1,40 @@
-# ClimaSense — cross-tier wire format (Slice 1 minimal surface).
+# ClimaSense — cross-tier wire format (Slice 2 surface).
 #
 # This file is the source of truth for the .NET ↔ Python contract.
-# Slice 1 only formalises the health endpoints; slices 7+ extend
-# this file with the ML run / ingestion / leaderboard surface.
+# Slice 2 extends slice 1 with the ML-tier request/response surface that
+# later slices (#7–#11) will implement; for now every endpoint declared
+# here has a stub Python handler returning 501 Not Implemented, and the
+# .NET tier generates a Kiota client against it.
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
-# JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases.
+# JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
+# emitted by `datamodel-code-generator` via the `--snake-case-field`
+# + alias-generator combination configured at codegen time.
 
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.1.0-slice-1
+  version: 0.2.0-slice-2
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
     or accept an `X-Request-ID` header on every request and propagate it
     via structured-log scope.
+
+    ## Failure mapping (web → ml)
+
+    The .NET tier's `MLServiceClient` consumes this contract through a
+    Kiota-generated client wrapped in a `DelegatingHandler` that maps
+    Python-side failure modes onto canonical HTTP semantics seen by the
+    browser:
+
+      * connection-refused / DNS failure        → `503 ml_service_unavailable`
+      * upstream 5xx (Python tier returned 5xx) → `502 ml_service_error`
+      * client timeout (30 s default, 60 s for changepoint)
+                                                → `504 ml_service_timeout`
+
+    No automatic retries. The browser sees actionable JSON; the Python
+    traceback never leaves the ml container.
 
 servers:
   - url: http://127.0.0.1:8080
@@ -23,7 +42,25 @@ servers:
   - url: http://ml:8000
     description: ml tier (network-internal; reachable from web only)
 
+tags:
+  - name: health
+    description: Liveness and readiness probes.
+  - name: forecast
+    description: Lag-LR forecast emission and read endpoints.
+  - name: anomalies
+    description: Sensor-failure / regime-shift / residual-outlier detection.
+  - name: profiles
+    description: Calendar-conditioned day-of-week × hour-of-day profiles.
+  - name: comfort
+    description: ASHRAE 55 graphical comfort zone scoring.
+  - name: sse
+    description: Server-Sent Events channel (web tier only).
+
 paths:
+  # -------------------------------------------------------------------
+  # Health — present on BOTH tiers. The contract documents the ml-tier
+  # surface; the web tier mirrors the same schema (see Program.cs).
+  # -------------------------------------------------------------------
   /api/health/live:
     get:
       summary: Liveness probe
@@ -61,6 +98,271 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
 
+  /api/health:
+    get:
+      summary: Combined health probe (legacy slice-2 alias)
+      description: |
+        Combined health alias. Returns the same body shape as `/api/health/ready`
+        but never returns 503 — degraded dependencies appear inside `checks`
+        so callers that prefer a single endpoint can introspect.
+      operationId: getHealth
+      tags: [health]
+      responses:
+        "200":
+          description: Combined health snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  # -------------------------------------------------------------------
+  # Forecast — lag-LR boot-fit. Slice 7 implements; slice 2 ships 501.
+  # -------------------------------------------------------------------
+  /api/forecast:
+    get:
+      summary: Read the most recently emitted forecast.
+      description: |
+        Returns the forecast row with the largest `generatedAt` that is
+        less-than-or-equal-to the current cursor. Read-path; bypasses
+        the ml tier in production (the .NET tier reads SQL directly).
+        This contract entry exists so a future ml-internal call (e.g.
+        `MLServiceClient.GetForecastAsync`) is type-safe end-to-end.
+      operationId: getForecast
+      tags: [forecast]
+      parameters:
+        - in: query
+          name: horizonHours
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 168
+            default: 72
+          description: Forecast horizon in hours (1–168). Default 72.
+      responses:
+        "200":
+          description: Forecast envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForecastEnvelope"
+        "501":
+          description: Stubbed in slice 2; implemented in slice 7.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+    post:
+      summary: Emit a forecast at the current cursor.
+      description: |
+        Triggers the lag-LR forecaster to predict `horizonHours` ahead
+        of the current cursor and append rows to `Forecasts`. The
+        boot-fitted coefficients are loaded once at FastAPI startup;
+        no per-request fit happens.
+      operationId: postForecast
+      tags: [forecast]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForecastRequest"
+      responses:
+        "200":
+          description: Forecast emitted and persisted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForecastEnvelope"
+        "501":
+          description: Stubbed in slice 2; implemented in slice 7.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "502":
+          description: ml tier returned 5xx — bubbled to the browser as bad-gateway.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "503":
+          description: ml tier unreachable (connection refused / dns failure).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "504":
+          description: ml tier exceeded the bounded timeout (30 s default).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  # -------------------------------------------------------------------
+  # Anomalies — three detectors, scan-window or scan-and-replace.
+  # -------------------------------------------------------------------
+  /api/anomalies/detect:
+    post:
+      summary: Run the anomaly detector pipeline.
+      description: |
+        Invokes the appropriate detector(s) against the cursor window.
+        - `sensor_failure` / `residual_outlier` — INSERT … WHERE NOT EXISTS
+          over a 24-hour lookback. Cheap; default timeout 30 s.
+        - `regime_shift` — `sp_getapplock`-guarded scan-and-replace over
+          a 90-day lookback. Longer; default timeout **60 s**.
+
+        Idempotent per `UNIQUE (AnomalyType, ReadingTime)`.
+      operationId: postAnomaliesDetect
+      tags: [anomalies]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnomalyDetectRequest"
+      responses:
+        "200":
+          description: Detection complete.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnomalyDetectResponse"
+        "501":
+          description: Stubbed in slice 2; implemented in slice 9.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "502":
+          description: ml tier returned 5xx.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "503":
+          description: ml tier unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "504":
+          description: ml tier exceeded the 60 s changepoint timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  # -------------------------------------------------------------------
+  # Profiles — calendar-conditioned z-scores; slice 10 implements.
+  # -------------------------------------------------------------------
+  /api/profiles/analyze:
+    post:
+      summary: Recompute calendar-conditioned day profiles.
+      description: |
+        Recomputes `DayProfiles` rows over `[start, end]` using the
+        SQL CASE classifier baked into `init-db.sql`. Idempotent — the
+        scan-and-replace transaction yields stable rows across reruns.
+      operationId: postProfilesAnalyze
+      tags: [profiles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProfilesAnalyzeRequest"
+      responses:
+        "200":
+          description: Profiles recomputed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfilesAnalyzeResponse"
+        "501":
+          description: Stubbed in slice 2; implemented in slice 10.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "502":
+          description: ml tier returned 5xx.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "503":
+          description: ml tier unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "504":
+          description: ml tier exceeded the bounded timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  # -------------------------------------------------------------------
+  # Comfort — ASHRAE 55 graphical zone scoring; slice 8 implements.
+  # -------------------------------------------------------------------
+  /api/comfort/score:
+    get:
+      summary: Score the current cursor's comfort against ASHRAE 55.
+      description: |
+        Scores the average of the last `hours` of `SensorReadings`
+        (clipped at cursor) against ASHRAE 55 summer/winter polygons
+        selected by calendar month and `COMFORT_HEMISPHERE` env var.
+        Pure function — no DB writes.
+      operationId: getComfortScore
+      tags: [comfort]
+      parameters:
+        - in: query
+          name: hours
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 168
+            default: 24
+          description: Trailing window in hours (1–168). Default 24.
+      responses:
+        "200":
+          description: Comfort score envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComfortScoreResponse"
+        "501":
+          description: Stubbed in slice 2; implemented in slice 8.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "502":
+          description: ml tier returned 5xx.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "503":
+          description: ml tier unreachable.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "504":
+          description: ml tier exceeded the bounded timeout.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  # -------------------------------------------------------------------
+  # SSE — registered on the web tier; documented here so the contract
+  # captures the complete cross-tier wire surface.
+  # -------------------------------------------------------------------
   /api/alerts/stream:
     get:
       summary: Server-Sent Events stream
@@ -86,15 +388,26 @@ paths:
 
 components:
   schemas:
+    # -----------------------------------------------------------------
+    # Health
+    # -----------------------------------------------------------------
+    Status:
+      type: string
+      enum: [ok, degraded, unavailable]
+      description: Coarse-grained outcome of a health probe.
+
+    Checks:
+      type: string
+      enum: [ok, fail, skipped]
+      description: Per-dependency probe outcome.
+
     HealthStatus:
       type: object
       additionalProperties: false
       required: [status, service, ts]
       properties:
         status:
-          type: string
-          enum: [ok, degraded, unavailable]
-          description: Coarse-grained outcome.
+          $ref: "#/components/schemas/Status"
         service:
           type: string
           description: Logical name of the responding service (e.g. `web`, `ml`).
@@ -106,6 +419,269 @@ components:
         checks:
           type: object
           additionalProperties:
-            type: string
-            enum: [ok, fail, skipped]
+            $ref: "#/components/schemas/Checks"
           description: Per-dependency probe outcomes (db, ml, etc.).
+
+    # -----------------------------------------------------------------
+    # ProblemDetails — RFC 7807-shaped error body used uniformly across
+    # 501 / 502 / 503 / 504 responses. Kept narrower than the RFC so
+    # codegen produces compact, predictable DTOs.
+    # -----------------------------------------------------------------
+    ProblemDetails:
+      type: object
+      additionalProperties: false
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Machine-readable error slug (snake_case).
+          example: ml_service_unavailable
+        message:
+          type: string
+          description: Human-readable explanation suitable for the browser.
+        requestId:
+          type: string
+          description: Echo of the inbound `X-Request-ID` header for correlation.
+
+    # -----------------------------------------------------------------
+    # Forecast
+    # -----------------------------------------------------------------
+    ForecastRequest:
+      type: object
+      additionalProperties: false
+      required: [horizonHours]
+      properties:
+        horizonHours:
+          type: integer
+          minimum: 1
+          maximum: 168
+          description: Forecast horizon in hours (1–168).
+          example: 72
+
+    ForecastPoint:
+      type: object
+      additionalProperties: false
+      required:
+        [
+          targetTime,
+          predictedTemperature,
+          predictedHumidity,
+          confidenceLowerTemp,
+          confidenceUpperTemp,
+        ]
+      properties:
+        targetTime:
+          type: string
+          format: date-time
+          description: Wall-clock time the prediction targets.
+        predictedTemperature:
+          type: number
+          format: double
+          description: Predicted air temperature in °C.
+        predictedHumidity:
+          type: number
+          format: double
+          description: Predicted relative humidity in %.
+        confidenceLowerTemp:
+          type: number
+          format: double
+          description: Lower bound of the 95 % temperature CI.
+        confidenceUpperTemp:
+          type: number
+          format: double
+          description: Upper bound of the 95 % temperature CI.
+
+    ForecastEnvelope:
+      type: object
+      additionalProperties: false
+      required: [generatedAt, modelVersion, horizonHours, points]
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+          description: Cursor value at the moment the forecast was emitted.
+        modelVersion:
+          type: string
+          description: Identifier of the boot-fitted lag-LR artefact.
+          example: lag-lr-v1
+        horizonHours:
+          type: integer
+          minimum: 1
+          maximum: 168
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/ForecastPoint"
+
+    # -----------------------------------------------------------------
+    # Anomalies
+    # -----------------------------------------------------------------
+    AnomalyType:
+      type: string
+      enum: [sensor_failure, regime_shift, residual_outlier]
+      description: |
+        The detector that flagged a row. `sensor_failure` and
+        `residual_outlier` are point-in-time; `regime_shift` is a
+        90-day scan-and-replace.
+
+    AnomalyDetectRequest:
+      type: object
+      additionalProperties: false
+      required: [types]
+      properties:
+        types:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnomalyType"
+          minItems: 1
+          description: Which detectors to run.
+        startDate:
+          type: string
+          format: date-time
+          description: |
+            Window start (inclusive). Optional — defaults are detector-specific
+            (24 h for point-in-time, 90 d for changepoint).
+        endDate:
+          type: string
+          format: date-time
+          description: Window end (inclusive). Optional — defaults to the cursor.
+
+    AnomalyRow:
+      type: object
+      additionalProperties: false
+      required: [anomalyType, readingTime, severity]
+      properties:
+        anomalyType:
+          $ref: "#/components/schemas/AnomalyType"
+        readingTime:
+          type: string
+          format: date-time
+        severity:
+          type: number
+          format: double
+          description: |
+            For `residual_outlier`: |residual| / rolling σ.
+            For the other detectors: 1.0 (binary).
+        description:
+          type: string
+          description: Short free-text description (e.g. `"gap > 10 min"`).
+
+    AnomalyDetectResponse:
+      type: object
+      additionalProperties: false
+      required: [inserted, totalScanned, rows]
+      properties:
+        inserted:
+          type: integer
+          description: Count of new rows committed (idempotent — duplicates are 0).
+        totalScanned:
+          type: integer
+          description: Count of readings scanned by the detectors.
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/AnomalyRow"
+
+    # -----------------------------------------------------------------
+    # Profiles
+    # -----------------------------------------------------------------
+    ProfilesAnalyzeRequest:
+      type: object
+      additionalProperties: false
+      required: [startDate, endDate]
+      properties:
+        startDate:
+          type: string
+          format: date
+          description: Window start (UTC date, inclusive).
+        endDate:
+          type: string
+          format: date
+          description: Window end (UTC date, inclusive).
+
+    Pattern:
+      type: string
+      enum: [quiet, warm, cool, volatile]
+      description: |
+        Derived `DayProfile` label. Precedence (per `init-db.sql.fn_classify_pattern`):
+        `volatile > warm > cool > quiet`.
+
+    DayProfileRow:
+      type: object
+      additionalProperties: false
+      required: [date, dayOfWeek, meanResidual, maxAbsZscore, pattern]
+      properties:
+        date:
+          type: string
+          format: date
+        dayOfWeek:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0 = Monday, 6 = Sunday (ISO 8601 weekday).
+        meanResidual:
+          type: number
+          format: double
+          description: Mean of standardised residuals for the day.
+        maxAbsZscore:
+          type: number
+          format: double
+          description: Largest absolute z-score for the day.
+        pattern:
+          $ref: "#/components/schemas/Pattern"
+
+    ProfilesAnalyzeResponse:
+      type: object
+      additionalProperties: false
+      required: [rowsReplaced, rows]
+      properties:
+        rowsReplaced:
+          type: integer
+          description: Count of `DayProfiles` rows replaced in this run.
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/DayProfileRow"
+
+    # -----------------------------------------------------------------
+    # Comfort
+    # -----------------------------------------------------------------
+    ComfortSeason:
+      type: string
+      enum: [summer, winter]
+      description: Selected by calendar month + `COMFORT_HEMISPHERE` env var.
+
+    ComfortRating:
+      type: string
+      enum: [excellent, acceptable, marginal, uncomfortable]
+      description: Qualitative bucket derived from `score`.
+
+    ComfortScoreResponse:
+      type: object
+      additionalProperties: false
+      required: [score, rating, season, bucketTime]
+      properties:
+        score:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: |
+            100 inside the ASHRAE 55 polygon for the selected season;
+            `max(0, 100 - α · d_polygon)` outside.
+        rating:
+          $ref: "#/components/schemas/ComfortRating"
+        season:
+          $ref: "#/components/schemas/ComfortSeason"
+        bucketTime:
+          type: string
+          format: date-time
+          description: Cursor value the score was computed at.
+        averageTemperature:
+          type: number
+          format: double
+          description: Mean of the trailing-window air temperature in °C.
+        averageHumidity:
+          type: number
+          format: double
+          description: Mean of the trailing-window relative humidity in %.

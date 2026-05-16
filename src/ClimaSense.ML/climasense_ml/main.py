@@ -1,8 +1,14 @@
 """FastAPI entry point for the ML tier.
 
-Slice 1 surface:
-  * GET /api/health/live   — process up, no dependency check.
-  * GET /api/health/ready  — DB connectivity probe.
+Slice 2 surface:
+  * GET  /api/health/live         — process up, no dependency check.
+  * GET  /api/health/ready        — DB connectivity probe.
+  * GET  /api/health              — combined alias (never 503; deps in `checks`).
+  * GET  /api/forecast            — slice-7 stub (501).
+  * POST /api/forecast            — slice-7 stub (501).
+  * POST /api/anomalies/detect    — slice-9 stub (501).
+  * POST /api/profiles/analyze    — slice-10 stub (501).
+  * GET  /api/comfort/score       — slice-8 stub (501).
 
 Cross-cutting concerns wired here:
   * Structured JSON logs to stdout via `logging_setup.configure()`.
@@ -12,6 +18,10 @@ Cross-cutting concerns wired here:
     `CursorSnapshot` produced by the `get_cursor` dependency, which
     binds the snapshot via `cursor.bind()` for the duration of the
     request body.
+  * `ContractValidator` runs on startup — `app.openapi()` is compared
+    against `contracts/openapi.yaml` and any divergence raises
+    `ContractMismatchError`, terminating the process. The single
+    source of truth for the wire format is the YAML.
 """
 
 from __future__ import annotations
@@ -31,10 +41,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .clock import IClock, WallClock
+from .contract_validator import ContractMismatchError, validate_contract
 from .cursor import CursorSnapshot, bind, release
 from .db import get_engine
 from .logging_setup import configure as configure_logging
 from .logging_setup import reset_request_id, set_request_id
+from .schemas import HealthStatus, HealthStatusEnum
+from .stubs import router as stubs_router
 
 REQUEST_ID_HEADER = "X-Request-ID"
 _REQUEST_ID_ALPHABET = string.ascii_letters + string.digits
@@ -131,10 +144,31 @@ class CursorScopeMiddleware(BaseHTTPMiddleware):
 # Lifespan
 # ---------------------------------------------------------------------
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     log = logging.getLogger("climasense_ml.startup")
-    log.info("ClimaSense.ML starting (slice 1 scaffolding)")
+    log.info("ClimaSense.ML starting (slice 2: contract + stubs)")
+
+    # ContractValidator — fail fast on any divergence between FastAPI's
+    # emitted OpenAPI and the hand-authored `contracts/openapi.yaml`.
+    # The validator logs `ContractValidator: OK` or `ContractValidator: FAILED`
+    # before raising. Per issue #4 AC, raising terminates the process.
+    skip_flag = os.environ.get("CLIMASENSE_CONTRACT_SKIP_VALIDATION", "").lower()
+    if skip_flag in ("1", "true", "yes"):
+        log.warning("ContractValidator: SKIPPED (CLIMASENSE_CONTRACT_SKIP_VALIDATION)")
+    else:
+        try:
+            validate_contract(app.openapi())
+        except ContractMismatchError:
+            log.exception("ContractValidator: refusing to start with mismatched contract")
+            raise
+        except FileNotFoundError:
+            log.exception(
+                "ContractValidator: contracts/openapi.yaml not found; "
+                "set CLIMASENSE_CONTRACT_PATH or run from the repo."
+            )
+            raise
+
     yield
     log.info("ClimaSense.ML stopping")
 
@@ -144,56 +178,122 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 # ---------------------------------------------------------------------
 app = FastAPI(
     title="ClimaSense.ML",
-    version="0.1.0-slice-1",
+    version="0.2.0-slice-2",
     lifespan=lifespan,
 )
 app.add_middleware(CursorScopeMiddleware)
 app.add_middleware(RequestIdMiddleware)
 
-
-@app.get("/api/health/live")
-async def health_live(clock: Annotated[IClock, Depends(get_clock)]) -> dict[str, str]:
-    """Liveness probe — returns immediately."""
-    return {
-        "status": "ok",
-        "service": "ml",
-        "ts": clock.utc_now().isoformat(),
-    }
+# Stub routes for the slice-2 contract surface (forecast / anomalies /
+# profiles / comfort). Each returns 501 with a `ProblemDetails` body.
+app.include_router(stubs_router)
 
 
-@app.get("/api/health/ready")
-async def health_ready(clock: Annotated[IClock, Depends(get_clock)]) -> JSONResponse:
-    """Readiness probe — confirms DB connectivity."""
-    log = logging.getLogger("climasense_ml.health")
-    checks: dict[str, str] = {}
-    db_ok = False
+def _build_health_body(
+    clock: IClock, checks: dict[str, str], db_ok: bool
+) -> dict[str, object]:
+    """Compose a body shaped exactly like `HealthStatus`.
 
-    if _is_db_probe_disabled():
-        # Local dev / tests can opt out of the live DB roundtrip.
-        checks["db"] = "skipped"
-        db_ok = True
+    We construct the dict (rather than a Pydantic instance) so the
+    `service` and `status` fields use the camelCase wire spelling
+    without any aliasing surprises — the response is hand-rolled JSON
+    while Pydantic owns the *schema* in `schemas/generated.py`.
+    """
+
+    status_value: str
+    if db_ok:
+        status_value = "ok"
+    elif any(v == "ok" for v in checks.values()):
+        status_value = "degraded"
     else:
-        try:
-            engine = get_engine()
-            with engine.connect() as conn:
-                value = conn.execute(text("SELECT 1")).scalar_one()
-                db_ok = value == 1
-                checks["db"] = "ok" if db_ok else "fail"
-        except SQLAlchemyError as ex:
-            log.warning("Readiness DB probe failed: %s", ex)
-            checks["db"] = "fail"
-        except Exception as ex:  # pragma: no cover — defensive
-            log.warning("Readiness DB probe raised %s: %s", type(ex).__name__, ex)
-            checks["db"] = "fail"
+        status_value = "unavailable"
 
-    body = {
-        "status": "ok" if db_ok else "unavailable",
+    return {
+        "status": status_value,
         "service": "ml",
         "ts": clock.utc_now().isoformat(),
         "checks": checks,
     }
+
+
+@app.get(
+    "/api/health/live",
+    operation_id="getHealthLive",
+    tags=["health"],
+    response_model=HealthStatus,
+    response_model_by_alias=True,
+)
+async def health_live(
+    clock: Annotated[IClock, Depends(get_clock)],
+) -> HealthStatus:
+    """Liveness probe — returns immediately, no dep checks."""
+    return HealthStatus(
+        status=HealthStatusEnum.ok,
+        service="ml",
+        ts=clock.utc_now(),  # type: ignore[arg-type]
+        checks=None,
+    )
+
+
+@app.get(
+    "/api/health/ready",
+    operation_id="getHealthReady",
+    tags=["health"],
+    responses={
+        200: {"model": HealthStatus},
+        503: {"model": HealthStatus},
+    },
+)
+async def health_ready(
+    clock: Annotated[IClock, Depends(get_clock)],
+) -> JSONResponse:
+    """Readiness probe — confirms DB connectivity."""
+    db_ok, checks = await _probe_db()
+    body = _build_health_body(clock, checks, db_ok)
     code = status.HTTP_200_OK if db_ok else status.HTTP_503_SERVICE_UNAVAILABLE
     return JSONResponse(body, status_code=code)
+
+
+@app.get(
+    "/api/health",
+    operation_id="getHealth",
+    tags=["health"],
+    responses={200: {"model": HealthStatus}},
+)
+async def health_combined(
+    clock: Annotated[IClock, Depends(get_clock)],
+) -> JSONResponse:
+    """Combined health alias — never 503; degraded deps appear in `checks`."""
+    db_ok, checks = await _probe_db()
+    body = _build_health_body(clock, checks, db_ok)
+    return JSONResponse(body, status_code=status.HTTP_200_OK)
+
+
+async def _probe_db() -> tuple[bool, dict[str, str]]:
+    """DB connectivity probe shared by `/ready` and the combined `/api/health`."""
+
+    log = logging.getLogger("climasense_ml.health")
+    checks: dict[str, str] = {}
+
+    if _is_db_probe_disabled():
+        checks["db"] = "skipped"
+        return True, checks
+
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            value = conn.execute(text("SELECT 1")).scalar_one()
+            db_ok = value == 1
+            checks["db"] = "ok" if db_ok else "fail"
+            return db_ok, checks
+    except SQLAlchemyError as ex:
+        log.warning("DB probe failed: %s", ex)
+        checks["db"] = "fail"
+        return False, checks
+    except Exception as ex:  # pragma: no cover — defensive
+        log.warning("DB probe raised %s: %s", type(ex).__name__, ex)
+        checks["db"] = "fail"
+        return False, checks
 
 
 def _is_db_probe_disabled() -> bool:
