@@ -10,7 +10,7 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-WIP-orange)
 
-> ⚠️ **Work in progress.** Only the analysis notebook is complete. The .NET web tier, FastAPI ML service, SQL Server schema, and Docker Compose stack are still in specification — APIs, code paths, and the directory layout described below are planned, not yet implemented. Expect breaking changes.
+> ⚠️ **Work in progress.** The analysis notebook is complete; the platform is being built one slice at a time (see [issue #2](https://github.com/arthurkahwa/climasense/issues/2)). **Slice 1 (foundation)** has landed: `docker-compose.yml` boots SQL Server 2022 + an empty FastAPI ML placeholder + an empty .NET web placeholder; both apps emit structured JSON logs with `X-Request-ID` correlation; the `AlertStream` SSE singleton heartbeats to a placeholder Razor page; `CursorSnapshot` and `IClock` are wired in both tiers. APIs, code paths, and feature work in the slices below are planned, not yet implemented. Expect breaking changes.
 
 ---
 
@@ -681,6 +681,7 @@ Design decisions, including the ones that walked back the original spec, are rec
 - [ADR-0008](./docs/adr/0008-explicit-single-zone-scope.md) — Explicit single-zone scope.
 - [ADR-0009](./docs/adr/0009-tight-14-day-build-scope.md) — Tight 14-day build scope (one live forecaster, leaderboard from notebook).
 - [ADR-0010](./docs/adr/0010-upstream-sql-server-as-source-of-truth.md) — Sensor readings sourced from an upstream MS SQL Server (CSV import dropped).
+- [ADR-0011](./docs/adr/0011-cursor-snapshot-and-interface-emergence-policy.md) — `CursorSnapshot` value type, scoped lifetime, and the interface-emergence policy.
 
 ---
 

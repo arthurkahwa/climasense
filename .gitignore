@@ -24,3 +24,25 @@ models/
 
 # Rendered notebook (regenerate with: jupyter nbconvert --to html --embed-images)
 Climate_Time_Series_Analysis.html
+
+# --- Secrets ---
+# Real env file is never committed. See `.env.example` for the template.
+.env
+
+# --- .NET ---
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# --- Python ---
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# --- Compose / Docker volumes ---
+.docker/
+mssql-data/
+
