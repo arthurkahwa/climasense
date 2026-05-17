@@ -6,6 +6,7 @@ using ClimaSense.Web.Generated.MLClient.Api.Comfort;
 using ClimaSense.Web.Generated.MLClient.Api.Forecast;
 using ClimaSense.Web.Generated.MLClient.Api.Forecasts;
 using ClimaSense.Web.Generated.MLClient.Api.Health;
+using ClimaSense.Web.Generated.MLClient.Api.Leaderboard;
 using ClimaSense.Web.Generated.MLClient.Api.Profiles;
 using ClimaSense.Web.Generated.MLClient.Api.Readings;
 using Microsoft.Kiota.Abstractions.Extensions;
@@ -51,6 +52,11 @@ namespace ClimaSense.Web.Generated.MLClient.Api
         public global::ClimaSense.Web.Generated.MLClient.Api.Health.HealthRequestBuilder Health
         {
             get => new global::ClimaSense.Web.Generated.MLClient.Api.Health.HealthRequestBuilder(PathParameters, RequestAdapter);
+        }
+        /// <summary>The leaderboard property</summary>
+        public global::ClimaSense.Web.Generated.MLClient.Api.Leaderboard.LeaderboardRequestBuilder Leaderboard
+        {
+            get => new global::ClimaSense.Web.Generated.MLClient.Api.Leaderboard.LeaderboardRequestBuilder(PathParameters, RequestAdapter);
         }
         /// <summary>The profiles property</summary>
         public global::ClimaSense.Web.Generated.MLClient.Api.Profiles.ProfilesRequestBuilder Profiles

@@ -3,6 +3,7 @@ using System.Text.Json;
 using ClimaSense.Web.Clock;
 using ClimaSense.Web.Cursor;
 using ClimaSense.Web.Forecasts;
+using ClimaSense.Web.Leaderboard;
 using ClimaSense.Web.Logging;
 using ClimaSense.Web.ML;
 using ClimaSense.Web.Readings;
@@ -128,6 +129,20 @@ builder.Services.AddScoped<ForecastReadService>(sp =>
 {
     var fetcher = sp.GetRequiredService<SqlForecastFetcher>();
     return new ForecastReadService(fetcher.FetchAsync);
+});
+
+// ---------------------------------------------------------------------
+// Leaderboard — slice 6. `LeaderboardReadService` follows the same
+// delegate-seam pattern. The table is global (no cursor clip);
+// `dbo.Leaderboard` is populated at FastAPI startup by the ml-tier's
+// `LeaderboardSeeder` and read by this service for the Razor
+// `Analysis` page + `GET /api/leaderboard`.
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<SqlLeaderboardFetcher>();
+builder.Services.AddScoped<LeaderboardReadService>(sp =>
+{
+    var fetcher = sp.GetRequiredService<SqlLeaderboardFetcher>();
+    return new LeaderboardReadService(fetcher.FetchAsync);
 });
 
 // ---------------------------------------------------------------------
@@ -279,6 +294,24 @@ app.MapGet("/api/forecasts/latest", async (
     var envelope = await forecasts.GetLatestAsync(cursor, cancellationToken)
         .ConfigureAwait(false);
     return Results.Json(envelope, statusCode: StatusCodes.Status200OK);
+});
+
+// ---------------------------------------------------------------------
+// Leaderboard — slice 6. Read-path bypass: the web tier executes
+// `SELECT ... FROM dbo.Leaderboard ORDER BY Mae ASC` directly and
+// never crosses into the ml container. The table is populated at
+// FastAPI startup by `LeaderboardSeeder`. Empty `rows` is a valid
+// 200 response (happens during the brief lifespan window before the
+// seeder finishes).
+// ---------------------------------------------------------------------
+app.MapGet("/api/leaderboard", async (
+    HttpContext ctx,
+    LeaderboardReadService leaderboard,
+    CancellationToken cancellationToken) =>
+{
+    var response = await leaderboard.GetAllAsync(cancellationToken)
+        .ConfigureAwait(false);
+    return Results.Json(response, statusCode: StatusCodes.Status200OK);
 });
 
 // Liveness — process up.
