@@ -1,14 +1,15 @@
-# ClimaSense — cross-tier wire format (Slice 4 surface).
+# ClimaSense — cross-tier wire format (Slice 5 surface).
 #
 # This file is the source of truth for the .NET ↔ Python contract.
 # Slice 2 introduced the ML-tier request/response surface (forecast /
 # anomalies / profiles / comfort) as 501-stubs; slice 3 added the
 # first read-path endpoint on the .NET tier — `GET /api/readings/latest`.
-# Slice 4 (#6) extends that read-path with two aggregating endpoints —
-# `GET /api/readings/range` and `GET /api/readings/heatmap` — that
-# power the historical Explorer page (range + GitHub-style calendar
-# heatmap). Both are served directly from SQL via `DATE_BUCKET` and
-# cursor-clipped with `WHERE ReadingTime <= @asOf`.
+# Slice 4 (#6) extended that read-path with `GET /api/readings/range`
+# and `GET /api/readings/heatmap`. Slice 5 (#7) flips the two
+# `/api/forecast` operations from 501-stubs to REAL ml-tier handlers
+# (lag-LR boot-fit + emission) and adds a web-tier `GET
+# /api/forecasts/latest` read that hits `dbo.fv_forecasts_at_cursor`
+# directly so the Explorer overlay never crosses to the ml container.
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
 # JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
@@ -18,7 +19,7 @@
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.4.0-slice-4
+  version: 0.5.0-slice-5
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
@@ -209,6 +210,33 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
+
+  # -------------------------------------------------------------------
+  # Forecasts read — web-tier read-path bypass for the Explorer overlay.
+  # Slice 5: reads the most recent batch through
+  # `dbo.fv_forecasts_at_cursor(@asOf)` (init-db.sql §3.1). Cursor-
+  # clipping is a property of the schema; the .NET service queries the
+  # TVF rather than the bare `Forecasts` table.
+  # -------------------------------------------------------------------
+  /api/forecasts/latest:
+    get:
+      summary: Return the most recent forecast batch visible at the cursor.
+      description: |
+        Returns the rows with the largest `generatedAt` value that is
+        less-than-or-equal-to the current cursor. Reads SQL Server
+        directly via the inline TVF `dbo.fv_forecasts_at_cursor(@asOf)`
+        — the ml container is NOT involved. Empty `points` is a valid
+        200 response (no forecast has been emitted at or before the
+        cursor yet).
+      operationId: getForecastsLatest
+      tags: [forecast]
+      responses:
+        "200":
+          description: Latest forecast envelope at the cursor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ForecastEnvelope"
 
   # -------------------------------------------------------------------
   # Anomalies — three detectors, scan-window or scan-and-replace.

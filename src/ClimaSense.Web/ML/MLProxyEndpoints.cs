@@ -103,6 +103,37 @@ public static class MLProxyEndpoints
             }
         });
 
+        // POST /api/ml/run/forecast — slice 5's explicit "Emit Forecast" UI
+        // path. Same proxy semantics as /api/ml/forecast (POST), kept
+        // separate so the button label (`Emit Forecast (72h)`) and the
+        // URL match per issue #7 §"What to build". Default body of
+        // `{ horizonHours: 72 }` is honoured when the caller omits one.
+        app.MapPost("/api/ml/run/forecast", async (
+            HttpContext ctx,
+            IMLServiceClient ml,
+            CancellationToken ct,
+            ForecastRequest? body) =>
+        {
+            try
+            {
+                var effectiveBody = body ?? new ForecastRequest { HorizonHours = 72 };
+                var env = await ml.PostForecastAsync(effectiveBody, ct).ConfigureAwait(false);
+                return env is null
+                    ? NotImplemented(ctx, "postForecast")
+                    : Results.Ok(env);
+            }
+            catch (KiotaProblemDetails kpd)
+            {
+                return MapKiotaProblemDetails(ctx, kpd);
+            }
+            catch (Exception ex) when (ex is MLServiceUnavailableException
+                                          or MLServiceBadGatewayException
+                                          or MLServiceTimeoutException)
+            {
+                return MapFailure(ctx, ex);
+            }
+        });
+
         // POST /api/ml/anomalies/detect
         app.MapPost("/api/ml/anomalies/detect", async (
             HttpContext ctx,

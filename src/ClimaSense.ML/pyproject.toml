@@ -1,7 +1,7 @@
 [project]
 name = "climasense-ml"
-version = "0.3.0"
-description = "ClimaSense ML tier (FastAPI). Slice 3: CSV bootstrap via bcp + latest-reading endpoint."
+version = "0.5.0"
+description = "ClimaSense ML tier (FastAPI). Slice 5: lag-LR boot-fit forecaster + emission."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
@@ -19,6 +19,14 @@ dependencies = [
     # Slice 3: pandas drives the CSV transform that precedes the bcp
     # bulk load (`IngestionService.bootstrap_from_csv_if_empty`).
     "pandas>=2.2,<4",
+    # Slice 5: lag-LR boot-fit + recursive multi-step prediction.
+    # scikit-learn pinned to a 1.x band — coefficients are stable
+    # across the band so the golden test stays within 1e-6 of the
+    # notebook's row in `assets/results.json`.
+    "scikit-learn>=1.5,<2",
+    "numpy>=1.26,<3",
+    # Slice 5: APScheduler drives the β-prime emission gate.
+    "apscheduler>=3.10,<4",
 ]
 
 [project.optional-dependencies]

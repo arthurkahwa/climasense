@@ -177,6 +177,19 @@
                 <button class="toggle" data-bucket="day">Daily</button>
                 <button class="toggle" data-bucket="week">Weekly</button>
             </div>
+
+            <!-- Slice 5: forecast overlay toggle + on-demand emission. -->
+            <div class="control-group" id="forecast-controls">
+                <span class="label">Forecast</span>
+                <button class="toggle" id="forecast-toggle" data-forecast="off"
+                        title="Toggle the lag-LR forecast overlay (line + 95% CI band).">
+                    Show
+                </button>
+                <button class="toggle" id="forecast-emit"
+                        title="Trigger POST /api/ml/run/forecast — emits a 72-hour forecast at the current cursor.">
+                    Emit Forecast (72h)
+                </button>
+            </div>
         </div>
         <div class="status" id="explorer-status">awaiting first query&hellip;</div>
     </section>

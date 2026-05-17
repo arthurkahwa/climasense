@@ -1,11 +1,11 @@
 """FastAPI entry point for the ML tier.
 
-Slice 3 surface (everything from slice 2 plus the bootstrap pipeline):
+Slice 5 surface (everything from slice 3 plus the live forecast):
   * GET  /api/health/live         — process up, no dependency check.
-  * GET  /api/health/ready        — DB connectivity AND bootstrap-complete probe.
+  * GET  /api/health/ready        — DB + bootstrap + forecaster fitted probe.
   * GET  /api/health              — combined alias (never 503; deps in `checks`).
-  * GET  /api/forecast            — slice-7 stub (501).
-  * POST /api/forecast            — slice-7 stub (501).
+  * GET  /api/forecast            — read latest forecast at cursor (slice 5).
+  * POST /api/forecast            — boot-fit emission + persist (slice 5).
   * POST /api/anomalies/detect    — slice-9 stub (501).
   * POST /api/profiles/analyze    — slice-10 stub (501).
   * GET  /api/comfort/score       — slice-8 stub (501).
@@ -55,6 +55,9 @@ from .clock import IClock, WallClock
 from .contract_validator import ContractMismatchError, validate_contract
 from .cursor import CursorSnapshot, bind, release
 from .db import get_engine
+from .forecast_emitter import ForecastEmitter
+from .forecast_router import build_router as build_forecast_router
+from .forecaster import LagLinearForecaster, load_hourly_from_sql
 from .ingestion import BcpUnavailableError, IngestionService
 from .logging_setup import configure as configure_logging
 from .logging_setup import reset_request_id, set_request_id
@@ -142,6 +145,68 @@ def get_bootstrap_state() -> _BootstrapTracker:
     return _bootstrap
 
 
+# ---------------------------------------------------------------------
+# Forecaster state machine (slice 5).
+#
+# Mirrors the bootstrap tracker. The forecaster is None until the
+# lifespan boot-fit completes; readiness reports `forecaster=fail`
+# while the fit hasn't run, `ok` after, `skipped` if disabled via
+# CLIMASENSE_SKIP_FORECAST_FIT.
+# ---------------------------------------------------------------------
+ForecasterState = Literal["pending", "fitting", "ready", "failed", "skipped"]
+
+
+class _ForecasterTracker:
+    """Process-singleton holder for the boot-fit state. Thread-safe."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._state: ForecasterState = "pending"
+        self._detail: str = "boot-fit has not been attempted yet"
+        self._forecaster: LagLinearForecaster | None = None
+
+    @property
+    def state(self) -> ForecasterState:
+        with self._lock:
+            return self._state
+
+    @property
+    def detail(self) -> str:
+        with self._lock:
+            return self._detail
+
+    @property
+    def forecaster(self) -> LagLinearForecaster | None:
+        with self._lock:
+            return self._forecaster
+
+    def mark(
+        self,
+        state: ForecasterState,
+        *,
+        detail: str,
+        forecaster: LagLinearForecaster | None = None,
+    ) -> None:
+        with self._lock:
+            self._state = state
+            self._detail = detail
+            if forecaster is not None:
+                self._forecaster = forecaster
+
+
+_forecaster_tracker = _ForecasterTracker()
+
+
+def get_forecaster_state() -> _ForecasterTracker:
+    """Public accessor — used by the readiness probe + forecast router."""
+    return _forecaster_tracker
+
+
+def get_forecaster() -> LagLinearForecaster | None:
+    """Dependency callable for `forecast_router.build_router`."""
+    return _forecaster_tracker.forecaster
+
+
 def _build_ingestion_service() -> IngestionService:
     """Construct an `IngestionService` wired against the real DB engine
     and the container-installed `bcp` binary.
@@ -197,6 +262,46 @@ def _build_ingestion_service() -> IngestionService:
         bcp_runner=_run_bcp,
         bcp_settings=bcp_settings,
     )
+
+
+def _run_boot_fit_blocking() -> None:
+    """Synchronous lag-LR boot-fit body — runs on a worker thread so
+    the lifespan can `await` it without blocking the event loop.
+
+    Pulls the hourly history from `SensorReadings` via
+    `load_hourly_from_sql`, fits the lag-LR coefficients, and stashes
+    the fitted forecaster in `_forecaster_tracker`. Records failure
+    states so the readiness probe surfaces them without leaking a
+    traceback.
+    """
+
+    log = logging.getLogger("climasense_ml.boot_fit")
+    _forecaster_tracker.mark("fitting", detail="loading hourly history from SensorReadings")
+
+    try:
+        engine = get_engine()
+        history = load_hourly_from_sql(engine)
+        if history.empty:
+            _forecaster_tracker.mark(
+                "failed",
+                detail="SensorReadings was empty when boot-fit ran",
+            )
+            log.error("LagLinearForecaster: SensorReadings was empty; boot-fit aborted")
+            return
+
+        forecaster = LagLinearForecaster()
+        summary = forecaster.fit_at_startup(history)
+        _forecaster_tracker.mark(
+            "ready",
+            detail=(
+                f"fit complete (n_train={summary.n_train}, "
+                f"MAE={summary.mae:.4f}, RMSE={summary.rmse:.4f})"
+            ),
+            forecaster=forecaster,
+        )
+    except Exception as ex:  # noqa: BLE001 — record and surface
+        _forecaster_tracker.mark("failed", detail=f"{type(ex).__name__}: {ex}")
+        log.exception("LagLinearForecaster: boot-fit failed")
 
 
 def _run_bootstrap_blocking() -> None:
@@ -378,20 +483,142 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             asyncio.to_thread(_run_bootstrap_blocking)
         )
 
+    # ----------------------------------------------------------------
+    # Lag-LR boot-fit (slice 5). Chained after the bootstrap task so
+    # the forecaster waits until `SensorReadings` is populated. The
+    # APScheduler emission job is registered once the fit completes.
+    # ----------------------------------------------------------------
+    skip_fit = os.environ.get(
+        "CLIMASENSE_SKIP_FORECAST_FIT", ""
+    ).lower() in ("1", "true", "yes")
+
+    if skip_fit:
+        log.warning(
+            "LagLinearForecaster: SKIPPED (CLIMASENSE_SKIP_FORECAST_FIT)"
+        )
+        _forecaster_tracker.mark(
+            "skipped",
+            detail="boot-fit skipped via CLIMASENSE_SKIP_FORECAST_FIT",
+        )
+    else:
+        log.info("LagLinearForecaster: scheduling boot-fit (waits for bootstrap)")
+        app.state.boot_fit_task = asyncio.create_task(
+            _await_bootstrap_then_fit(app)
+        )
+
     yield
 
     log.info("ClimaSense.ML stopping")
-    # Best-effort wait for bootstrap to finish on shutdown so the
-    # lifespan logs are tidy. Real cancellation isn't necessary because
-    # the bootstrap is short (30-90 s) and shutting down mid-run leaves
-    # the DB in the same idempotent state we started with.
-    task = getattr(app.state, "bootstrap_task", None)
-    if task is not None and not task.done():
-        task.cancel()
+    # Best-effort cancellation. The bootstrap is short (30-90 s); the
+    # boot-fit is sub-second. Cancelling mid-run leaves the DB in the
+    # same idempotent state we started with.
+    for attr in ("bootstrap_task", "boot_fit_task"):
+        task = getattr(app.state, attr, None)
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+    sched = getattr(app.state, "forecast_scheduler", None)
+    if sched is not None:
         try:
-            await task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+            sched.shutdown(wait=False)
+        except Exception:  # noqa: BLE001
+            log.exception("Forecast scheduler: shutdown raised")
+
+
+async def _await_bootstrap_then_fit(app: FastAPI) -> None:
+    """Wait for bootstrap to finish, then trigger the boot-fit.
+
+    Polls `_bootstrap.state` instead of `await`-ing a specific task to
+    keep this resilient to either ordering — the bootstrap may be
+    `skipped` immediately (idempotent re-run) or take 30-90 s on first
+    boot.
+    """
+    log = logging.getLogger("climasense_ml.boot_fit")
+    while _bootstrap.state in ("pending", "in_progress"):
+        await asyncio.sleep(0.5)
+
+    if _bootstrap.state == "failed":
+        _forecaster_tracker.mark(
+            "failed",
+            detail=f"bootstrap failed: {_bootstrap.detail}",
+        )
+        log.error(
+            "LagLinearForecaster: boot-fit cannot run because bootstrap failed (%s)",
+            _bootstrap.detail,
+        )
+        return
+
+    # `complete` or `skipped` — both mean SensorReadings is populated.
+    await asyncio.to_thread(_run_boot_fit_blocking)
+
+    if _forecaster_tracker.state != "ready":
+        log.warning(
+            "Forecast scheduler: not registered (forecaster state=%s)",
+            _forecaster_tracker.state,
+        )
+        return
+
+    skip_scheduler = os.environ.get(
+        "CLIMASENSE_SKIP_FORECAST_SCHEDULER", ""
+    ).lower() in ("1", "true", "yes")
+    if skip_scheduler:
+        log.info(
+            "Forecast scheduler: SKIPPED (CLIMASENSE_SKIP_FORECAST_SCHEDULER)"
+        )
+        return
+    try:
+        _register_forecast_scheduler(app)
+    except Exception:  # noqa: BLE001
+        log.exception("Forecast scheduler: registration failed")
+
+
+def _register_forecast_scheduler(app: FastAPI) -> None:
+    """Register the APScheduler interval job that drives β-prime
+    forecast emission once per replay-hour.
+
+    The scheduler is started here and shut down by the lifespan
+    teardown. The job uses `ForecastEmitter.emit_if_due` which gates
+    internally on `CursorSnapshot.should_emit` — at wall-clock speed
+    this means roughly one row per hour; under slice-12 `ReplayClock`
+    (60×) it produces one row per replay-hour, i.e. ~one per wall-minute.
+    """
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    log = logging.getLogger("climasense_ml.scheduler")
+    forecaster = _forecaster_tracker.forecaster
+    if forecaster is None:
+        log.warning("Forecast scheduler: forecaster unavailable; skipping registration")
+        return
+
+    emitter = ForecastEmitter(
+        forecaster=forecaster,
+        engine=get_engine(),
+        clock_provider=lambda: CursorSnapshot.from_clock(_clock),
+        horizon_hours=72,
+    )
+
+    scheduler = BackgroundScheduler(daemon=True, timezone="UTC")
+    # `next_run_time` is intentionally omitted so APScheduler schedules
+    # the first run at `now() + interval`. Passing `None` would pause
+    # the job; passing `datetime.utcnow()` would fire instantly which
+    # races the forecaster fit. The 1-min lag is acceptable — the
+    # on-demand POST endpoint covers the "give me one right now"
+    # reviewer flow.
+    scheduler.add_job(
+        emitter.emit_if_due,
+        trigger="interval",
+        minutes=1,
+        id="forecast-emit",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    app.state.forecast_scheduler = scheduler
+    app.state.forecast_emitter = emitter
+    log.info("Forecast scheduler: started (interval=1 min, cadence=1 h)")
 
 
 # ---------------------------------------------------------------------
@@ -399,14 +626,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 # ---------------------------------------------------------------------
 app = FastAPI(
     title="ClimaSense.ML",
-    version="0.2.0-slice-2",
+    version="0.5.0-slice-5",
     lifespan=lifespan,
 )
 app.add_middleware(CursorScopeMiddleware)
 app.add_middleware(RequestIdMiddleware)
 
-# Stub routes for the slice-2 contract surface (forecast / anomalies /
+# Slice 5: real /api/forecast handlers (boot-fit emission). Registered
+# BEFORE the stub router so the stub router only carries the still-
+# pending endpoints (anomalies, profiles, comfort).
+app.include_router(
+    build_forecast_router(
+        get_forecaster=get_forecaster,
+        get_engine=get_engine,
+        get_cursor=get_cursor,
+    )
+)
+
+# Stub routes for the still-pending contract surface (anomalies /
 # profiles / comfort). Each returns 501 with a `ProblemDetails` body.
+# Slice 5 dropped /api/forecast (now real) from this router.
 app.include_router(stubs_router)
 
 
@@ -502,17 +741,18 @@ async def health_combined(
 
 
 async def _probe_ready() -> tuple[bool, dict[str, str]]:
-    """Compose the readiness checks: DB + bootstrap.
+    """Compose the readiness checks: DB + bootstrap + forecaster.
 
     The pair `(ready, checks)` mirrors the slice-1 contract. `checks`
-    keys are the per-dependency outcomes (`db`, `bootstrap`) so the
-    body's `checks` map gives a reviewer running curl an unambiguous
-    "what's holding us back" answer.
+    keys are the per-dependency outcomes (`db`, `bootstrap`,
+    `forecaster`) so the body's `checks` map gives a reviewer running
+    curl an unambiguous "what's holding us back" answer.
     """
 
     db_ok, checks = await _probe_db()
     bootstrap_ok = _probe_bootstrap(checks)
-    return (db_ok and bootstrap_ok), checks
+    forecaster_ok = _probe_forecaster(checks)
+    return (db_ok and bootstrap_ok and forecaster_ok), checks
 
 
 def _probe_bootstrap(checks: dict[str, str]) -> bool:
@@ -530,6 +770,23 @@ def _probe_bootstrap(checks: dict[str, str]) -> bool:
         return False
     # "pending" or "in_progress"
     checks["bootstrap"] = "skipped"
+    return False
+
+
+def _probe_forecaster(checks: dict[str, str]) -> bool:
+    """Map the lag-LR boot-fit state to a readiness check.
+
+    `ready` and `skipped` (env override) gate-open. `failed` reports
+    `fail`. `pending` / `fitting` report `skipped` (transient).
+    """
+    state = _forecaster_tracker.state
+    if state in ("ready", "skipped"):
+        checks["forecaster"] = "ok"
+        return True
+    if state == "failed":
+        checks["forecaster"] = "fail"
+        return False
+    checks["forecaster"] = "skipped"
     return False
 
 
