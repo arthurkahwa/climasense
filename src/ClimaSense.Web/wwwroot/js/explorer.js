@@ -36,14 +36,21 @@
   var CORPUS_START = '2019-07-09T00:00:00Z';
 
   // State held in the URL hash so reloads preserve the selected range.
-  // Form: #range=1W&bucket=hour&year=2024
+  // Form: #range=1W&bucket=hour&year=2024&forecast=on
   var state = {
     range: '1W',
     bucket: 'hour',
     customStart: null,    // ISO 8601 or null
     customEnd: null,
     year: defaultYear(),
+    // Slice 5: forecast overlay toggle ('on' shows the latest forecast
+    // line + 95 % CI band on the time-series chart).
+    forecast: 'off',
   };
+
+  // Cached latest forecast envelope; refreshed on `loadForecast()` and
+  // re-applied whenever the time-series chart re-renders.
+  var lastForecastEnvelope = null;
 
   function defaultYear() {
     return new Date().getUTCFullYear();
@@ -115,10 +122,59 @@
       });
     }
 
+    // Forecast toggle (slice 5).
+    var fcToggle = document.getElementById('forecast-toggle');
+    if (fcToggle) {
+      fcToggle.addEventListener('click', function () {
+        state.forecast = (state.forecast === 'on') ? 'off' : 'on';
+        fcToggle.setAttribute('data-forecast', state.forecast);
+        fcToggle.classList.toggle('selected', state.forecast === 'on');
+        renderHeaderState();
+        if (state.forecast === 'on') {
+          loadForecast();
+        } else {
+          loadRange();
+        }
+      });
+    }
+
+    // Emit Forecast button (slice 5).
+    var fcEmit = document.getElementById('forecast-emit');
+    if (fcEmit) {
+      fcEmit.addEventListener('click', function () {
+        fcEmit.disabled = true;
+        fcEmit.textContent = 'Emitting…';
+        emitForecast(72)
+          .then(function () {
+            return loadForecast();
+          })
+          .then(function () {
+            state.forecast = 'on';
+            if (fcToggle) {
+              fcToggle.setAttribute('data-forecast', 'on');
+              fcToggle.classList.add('selected');
+            }
+            renderHeaderState();
+            loadRange();
+          })
+          .catch(function (err) {
+            var msg = (err && err.body && err.body.message) || (err && err.message) || 'unknown error';
+            flash('Emit failed: ' + msg);
+          })
+          .then(function () {
+            fcEmit.disabled = false;
+            fcEmit.textContent = 'Emit Forecast (72h)';
+          });
+      });
+    }
+
     // Initial loads.
     syncCustomInputsFromRange();
     loadRange();
     loadHeatmap();
+    if (state.forecast === 'on') {
+      loadForecast();
+    }
   });
 
   function parseHashIntoState() {
@@ -134,6 +190,7 @@
       else if (k === 'year') state.year = parseInt(v, 10) || state.year;
       else if (k === 'start') state.customStart = v;
       else if (k === 'end') state.customEnd = v;
+      else if (k === 'forecast') state.forecast = (v === 'on') ? 'on' : 'off';
     });
   }
 
@@ -142,6 +199,7 @@
       'range=' + encodeURIComponent(state.range),
       'bucket=' + encodeURIComponent(state.bucket),
       'year=' + encodeURIComponent(state.year),
+      'forecast=' + encodeURIComponent(state.forecast),
     ];
     if (state.range === 'CUSTOM' && state.customStart && state.customEnd) {
       parts.push('start=' + encodeURIComponent(state.customStart));
@@ -177,7 +235,14 @@
       status.textContent =
         'range: ' + state.range +
         ' (' + window_.start + ' → ' + window_.end + ')' +
-        ' · bucket: ' + state.bucket;
+        ' · bucket: ' + state.bucket +
+        ' · forecast: ' + state.forecast;
+    }
+    var fcToggle = document.getElementById('forecast-toggle');
+    if (fcToggle) {
+      fcToggle.setAttribute('data-forecast', state.forecast);
+      fcToggle.classList.toggle('selected', state.forecast === 'on');
+      fcToggle.textContent = (state.forecast === 'on') ? 'Hide' : 'Show';
     }
   }
 
@@ -291,6 +356,45 @@
       yaxis: 'y2',
       hovertemplate: '%{x|%Y-%m-%d %H:%M}<br>%{y:.1f} %<extra></extra>',
     });
+
+    // Slice 5: forecast overlay (line + 95 % CI band) when the toggle
+    // is on and a cached envelope is available. The forecast points
+    // share the same x-axis (time) and y-axis (temperature).
+    if (state.forecast === 'on' && lastForecastEnvelope &&
+        lastForecastEnvelope.points && lastForecastEnvelope.points.length > 0) {
+      var fTimes = [];
+      var fTemp = [];
+      var fLow = [];
+      var fHigh = [];
+      lastForecastEnvelope.points.forEach(function (p) {
+        fTimes.push(p.targetTime);
+        fTemp.push(p.predictedTemperature);
+        fLow.push(p.confidenceLowerTemp);
+        fHigh.push(p.confidenceUpperTemp);
+      });
+      // 95 % CI band (drawn first so the line sits on top).
+      traces.push({
+        x: fTimes.concat(fTimes.slice().reverse()),
+        y: fHigh.concat(fLow.slice().reverse()),
+        fill: 'toself',
+        fillcolor: 'rgba(248, 81, 73, 0.18)', // soft coral wash
+        line: { color: 'rgba(0,0,0,0)' },
+        hoverinfo: 'skip',
+        showlegend: true,
+        name: 'Forecast 95% CI',
+      });
+      traces.push({
+        x: fTimes,
+        y: fTemp,
+        type: 'scatter',
+        mode: 'lines+markers',
+        name: 'Forecast (' + lastForecastEnvelope.modelVersion + ')',
+        line: { color: '#f85149', width: 2, dash: 'dash' },
+        marker: { size: 4, color: '#f85149' },
+        hovertemplate:
+          '%{x|%Y-%m-%d %H:%M}<br>%{y:.2f} °C (predicted)<extra></extra>',
+      });
+    }
 
     var layout = window.ClimaSensePlotly.darkLayout({
       title: {
@@ -459,6 +563,55 @@
     var msg = (err && err.body && err.body.message) || 'unknown error';
     flash('Heatmap query failed: ' + msg);
     replaceChartWithError(HEATMAP_CHART_ID, '/api/readings/heatmap failed: ' + msg);
+  }
+
+  // ----------------------------------------------------------------
+  // Forecast overlay — slice 5
+  // ----------------------------------------------------------------
+  function loadForecast() {
+    return fetch('/api/forecasts/latest', { headers: { 'Accept': 'application/json' } })
+      .then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().then(function (body) {
+            throw { status: resp.status, body: body };
+          }, function () {
+            throw { status: resp.status, body: { error: 'http_error', message: 'HTTP ' + resp.status } };
+          });
+        }
+        return resp.json();
+      })
+      .then(function (body) {
+        lastForecastEnvelope = body;
+        if (!body.points || body.points.length === 0) {
+          flash('No forecast emitted yet — click "Emit Forecast (72h)".');
+        }
+        loadRange(); // re-render to merge the overlay
+      })
+      .catch(function (err) {
+        var msg = (err && err.body && err.body.message) || 'unknown error';
+        flash('Forecast load failed: ' + msg);
+      });
+  }
+
+  function emitForecast(horizonHours) {
+    return fetch('/api/ml/run/forecast', {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ horizonHours: horizonHours || 72 }),
+    })
+      .then(function (resp) {
+        if (!resp.ok) {
+          return resp.json().then(function (body) {
+            throw { status: resp.status, body: body };
+          }, function () {
+            throw { status: resp.status, body: { error: 'http_error', message: 'HTTP ' + resp.status } };
+          });
+        }
+        return resp.json();
+      });
   }
 
   // ----------------------------------------------------------------

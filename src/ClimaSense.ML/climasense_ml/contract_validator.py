@@ -127,6 +127,13 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # the ml tier entirely (DATE_BUCKET runs on SQL Server).
         "/api/readings/range",
         "/api/readings/heatmap",
+        # Slice 5: /api/forecasts/latest is a .NET-tier read of the
+        # `dbo.fv_forecasts_at_cursor` TVF — bypasses the ml tier. The
+        # ml tier owns POST /api/forecast (emission) and GET /api/forecast
+        # (last batch); the slim "latest" read on the web tier exists
+        # so the Explorer chart can overlay forecasts without a Python
+        # hop.
+        "/api/forecasts/latest",
     }
 
     def _strip(node: Any) -> Any:

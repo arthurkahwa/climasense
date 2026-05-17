@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# ClimaSense.ML — FastAPI tier (slice 3: bcp bootstrap + stubs).
+# ClimaSense.ML — FastAPI tier (slice 5: lag-LR forecaster).
 #
 # We use the official `uv` image so the Python toolchain matches local
 # dev. `unixodbc` + the Microsoft ODBC Driver 18 for SQL Server are
@@ -76,6 +76,9 @@ RUN uv venv /opt/venv \
         "pydantic>=2.9,<3" \
         "PyYAML>=6.0,<7" \
         "pandas>=2.2,<4" \
+        "scikit-learn>=1.5,<2" \
+        "numpy>=1.26,<3" \
+        "apscheduler>=3.10,<4" \
         "datamodel-code-generator>=0.26,<1"
 
 # Contract first — codegen reads from /app/contracts/openapi.yaml.

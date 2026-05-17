@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using ClimaSense.Web.Clock;
 using ClimaSense.Web.Cursor;
+using ClimaSense.Web.Forecasts;
 using ClimaSense.Web.Logging;
 using ClimaSense.Web.ML;
 using ClimaSense.Web.Readings;
@@ -114,6 +115,19 @@ builder.Services.AddScoped<RangeQueryService>(sp =>
         sqlFetcher.FetchRangeAsync,
         sqlFetcher.FetchHeatmapAsync,
         rawMaxDays);
+});
+
+// ---------------------------------------------------------------------
+// Forecasts — slice 5. `ForecastReadService` follows the slice-3/4
+// delegate-seam pattern. The read goes through the
+// `dbo.fv_forecasts_at_cursor` TVF so cursor-clipping is enforced by
+// the schema, not by caller discipline.
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<SqlForecastFetcher>();
+builder.Services.AddScoped<ForecastReadService>(sp =>
+{
+    var fetcher = sp.GetRequiredService<SqlForecastFetcher>();
+    return new ForecastReadService(fetcher.FetchAsync);
 });
 
 // ---------------------------------------------------------------------
@@ -249,6 +263,22 @@ app.MapGet("/api/readings/heatmap", async (
         .GetHeatmapAsync(cursor, year.Value, cancellationToken)
         .ConfigureAwait(false);
     return Results.Json(response, statusCode: StatusCodes.Status200OK);
+});
+
+// ---------------------------------------------------------------------
+// Forecasts — slice 5. Read-path bypass via the
+// `dbo.fv_forecasts_at_cursor(@asOf)` inline TVF. Empty `points` is
+// a valid 200 response — happens before the first emission lands.
+// ---------------------------------------------------------------------
+app.MapGet("/api/forecasts/latest", async (
+    HttpContext ctx,
+    ForecastReadService forecasts,
+    CursorSnapshot cursor,
+    CancellationToken cancellationToken) =>
+{
+    var envelope = await forecasts.GetLatestAsync(cursor, cancellationToken)
+        .ConfigureAwait(false);
+    return Results.Json(envelope, statusCode: StatusCodes.Status200OK);
 });
 
 // Liveness — process up.

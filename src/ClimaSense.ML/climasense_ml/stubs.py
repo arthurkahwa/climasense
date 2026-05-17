@@ -1,9 +1,10 @@
-"""501-Not-Implemented stub handlers for the slice-2 contract surface.
+"""501-Not-Implemented stub handlers for the remaining contract surface.
 
-Every endpoint declared in `contracts/openapi.yaml` has a Python
-handler. The handlers in this module return 501 with a uniform
-`ProblemDetails` body until the implementing slice (#7–#11) replaces
-them with real handlers.
+Slice 2 stubbed every contract endpoint. Slice 5 lands the real
+`/api/forecast` GET + POST handlers (see `forecast_router.py`) so they
+are removed from this module. The remaining stubs (anomalies, profiles,
+comfort) continue to return 501 until their implementing slices land
+(#9 / #10 / #8 respectively).
 
 Why dedicated stubs (rather than a wildcard catch-all):
 
@@ -31,8 +32,6 @@ from .schemas import (
     AnomalyDetectRequest,
     AnomalyDetectResponse,
     ComfortScoreResponse,
-    ForecastEnvelope,
-    ForecastRequest,
     ProblemDetails,
     ProfilesAnalyzeRequest,
     ProfilesAnalyzeResponse,
@@ -60,56 +59,6 @@ def _not_implemented(request: Request, slug: str, message: str) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
         content=body.model_dump(by_alias=True, exclude_none=True),
-    )
-
-
-# -------------------------------------------------------------------
-# Forecast
-# -------------------------------------------------------------------
-@router.get(
-    "/api/forecast",
-    operation_id="getForecast",
-    tags=["forecast"],
-    responses={
-        200: {"model": ForecastEnvelope},
-        501: {"model": ProblemDetails},
-    },
-)
-async def get_forecast(
-    request: Request,
-    horizon_hours: Annotated[int, Query(alias="horizonHours", ge=1, le=168)] = 72,
-) -> JSONResponse:
-    """Stubbed in slice 2; lag-LR boot-fit emission lands in slice 7."""
-    del horizon_hours
-    return _not_implemented(
-        request,
-        "not_implemented",
-        "GET /api/forecast lands in slice 7 (lag-LR boot-fit emission).",
-    )
-
-
-@router.post(
-    "/api/forecast",
-    operation_id="postForecast",
-    tags=["forecast"],
-    responses={
-        200: {"model": ForecastEnvelope},
-        501: {"model": ProblemDetails},
-        502: {"model": ProblemDetails},
-        503: {"model": ProblemDetails},
-        504: {"model": ProblemDetails},
-    },
-)
-async def post_forecast(
-    request: Request,
-    body: Annotated[ForecastRequest, Body()],
-) -> JSONResponse:
-    """Stubbed in slice 2; emission engine lands in slice 7."""
-    del body
-    return _not_implemented(
-        request,
-        "not_implemented",
-        "POST /api/forecast lands in slice 7 (lag-LR emission persistence).",
     )
 
 

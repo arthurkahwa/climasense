@@ -18,6 +18,9 @@ os.environ.setdefault("CLIMASENSE_HEALTH_SKIP_DB", "1")
 os.environ.setdefault("CLIMASENSE_CONTRACT_SKIP_VALIDATION", "1")
 # Slice 3: TestClient triggers the lifespan; skip the live bcp bootstrap.
 os.environ.setdefault("CLIMASENSE_SKIP_BOOTSTRAP", "1")
+# Slice 5: skip the lag-LR boot-fit (no DB available in this test).
+os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_FIT", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_SCHEDULER", "1")
 
 import pathlib  # noqa: E402
 
@@ -42,6 +45,12 @@ _REAL_ENDPOINTS = {
     # Slice 4: range + heatmap, same web-tier-only rationale.
     ("/api/readings/range", "get"),
     ("/api/readings/heatmap", "get"),
+    # Slice 5: /api/forecast GET + POST are REAL ml-tier endpoints now
+    # (lag-LR boot-fit + emission). Not stubs.
+    ("/api/forecast", "get"),
+    ("/api/forecast", "post"),
+    # Slice 5: /api/forecasts/latest is web-tier read-path bypass.
+    ("/api/forecasts/latest", "get"),
 }
 
 
@@ -106,6 +115,11 @@ def test_contract_endpoint_returns_501(path: str, method: str) -> None:
     # request didn't supply / mint one.
 
 
-def test_at_least_five_stub_endpoints_are_present() -> None:
-    """Sanity floor — guards against accidental removal of stub routes."""
-    assert len(_stub_routes()) >= 5
+def test_at_least_three_stub_endpoints_are_present() -> None:
+    """Sanity floor — guards against accidental removal of stub routes.
+
+    Slice 5 promoted /api/forecast GET + POST from stubs to real
+    handlers, dropping the floor from 5 to 3 (anomalies, profiles,
+    comfort remain stubbed).
+    """
+    assert len(_stub_routes()) >= 3

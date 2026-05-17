@@ -4,6 +4,7 @@ using ClimaSense.Web.Generated.MLClient.Api.Alerts;
 using ClimaSense.Web.Generated.MLClient.Api.Anomalies;
 using ClimaSense.Web.Generated.MLClient.Api.Comfort;
 using ClimaSense.Web.Generated.MLClient.Api.Forecast;
+using ClimaSense.Web.Generated.MLClient.Api.Forecasts;
 using ClimaSense.Web.Generated.MLClient.Api.Health;
 using ClimaSense.Web.Generated.MLClient.Api.Profiles;
 using ClimaSense.Web.Generated.MLClient.Api.Readings;
@@ -40,6 +41,11 @@ namespace ClimaSense.Web.Generated.MLClient.Api
         public global::ClimaSense.Web.Generated.MLClient.Api.Forecast.ForecastRequestBuilder Forecast
         {
             get => new global::ClimaSense.Web.Generated.MLClient.Api.Forecast.ForecastRequestBuilder(PathParameters, RequestAdapter);
+        }
+        /// <summary>The forecasts property</summary>
+        public global::ClimaSense.Web.Generated.MLClient.Api.Forecasts.ForecastsRequestBuilder Forecasts
+        {
+            get => new global::ClimaSense.Web.Generated.MLClient.Api.Forecasts.ForecastsRequestBuilder(PathParameters, RequestAdapter);
         }
         /// <summary>The health property</summary>
         public global::ClimaSense.Web.Generated.MLClient.Api.Health.HealthRequestBuilder Health
