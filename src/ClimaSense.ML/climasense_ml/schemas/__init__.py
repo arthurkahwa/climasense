@@ -18,6 +18,7 @@ from .generated import (  # noqa: F401  (re-export surface for handlers)
     ForecastPoint,
     ForecastRequest,
     HealthStatus,
+    LatestReading,
     ProblemDetails,
     ProfilesAnalyzeRequest,
     ProfilesAnalyzeResponse,

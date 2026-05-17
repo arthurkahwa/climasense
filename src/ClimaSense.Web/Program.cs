@@ -4,6 +4,7 @@ using ClimaSense.Web.Clock;
 using ClimaSense.Web.Cursor;
 using ClimaSense.Web.Logging;
 using ClimaSense.Web.ML;
+using ClimaSense.Web.Readings;
 using ClimaSense.Web.Sse;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Data.SqlClient;
@@ -82,6 +83,19 @@ builder.Services
     .AddHttpMessageHandler<MLFailureMappingHandler>();
 
 // ---------------------------------------------------------------------
+// Readings — slice 3. `SensorDataService` is scoped (matches the
+// CursorSnapshot lifetime); its single seam (`LatestReadingFetcher`)
+// is wired to the production SQL adapter via a delegate cast so tests
+// can inject a lambda without touching DI.
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<SqlLatestReadingFetcher>();
+builder.Services.AddScoped<SensorDataService>(sp =>
+{
+    var sqlFetcher = sp.GetRequiredService<SqlLatestReadingFetcher>();
+    return new SensorDataService(sqlFetcher.FetchAsync);
+});
+
+// ---------------------------------------------------------------------
 // Razor Pages — single placeholder Index page.
 // ---------------------------------------------------------------------
 builder.Services.AddRazorPages();
@@ -100,6 +114,38 @@ app.MapRazorPages();
 // traceback. The slice-2 ml tier returns 501 for every contract
 // endpoint, so a successful call here surfaces as 501 to the browser.
 app.MapMLProxy();
+
+// ---------------------------------------------------------------------
+// Readings — slice 3. Read-path bypass: this endpoint reads SQL Server
+// directly via `SensorDataService` and never crosses into the ml tier.
+// Returns 200 with the cursor-clipped latest row, or 404 if the
+// table is empty (which only happens before bootstrap completes — the
+// ml-tier readiness gate prevents the web tier from starting in that
+// window).
+// ---------------------------------------------------------------------
+app.MapGet("/api/readings/latest", async (
+    HttpContext ctx,
+    SensorDataService sensors,
+    CursorSnapshot cursor,
+    CancellationToken cancellationToken) =>
+{
+    var latest = await sensors.GetLatestAsync(cursor, cancellationToken)
+        .ConfigureAwait(false);
+    if (latest is null)
+    {
+        return Results.Json(
+            new
+            {
+                error = "no_readings_yet",
+                message =
+                    "SensorReadings is empty (bootstrap may still be running). " +
+                    "Wait for /api/health/ready on the ml tier to return 200.",
+                requestId = RequestIdMiddleware.Get(ctx),
+            },
+            statusCode: StatusCodes.Status404NotFound);
+    }
+    return Results.Json(latest, statusCode: StatusCodes.Status200OK);
+});
 
 // Liveness — process up.
 app.MapGet("/api/health/live", (HttpContext ctx, IClock clock) =>

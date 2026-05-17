@@ -1,12 +1,22 @@
 # syntax=docker/dockerfile:1.7
 #
-# ClimaSense.ML — FastAPI tier for slice 2 (OpenAPI contract + codegen).
+# ClimaSense.ML — FastAPI tier (slice 3: bcp bootstrap + stubs).
 #
 # We use the official `uv` image so the Python toolchain matches local
 # dev. `unixodbc` + the Microsoft ODBC Driver 18 for SQL Server are
 # installed so pyodbc can talk to the `db` service.
 #
-# Slice 2 changes:
+# Slice 3 changes (on top of slice 2's contract / codegen):
+#   * `mssql-tools18` is installed alongside `msodbcsql18`. The package
+#     ships the `bcp` binary at `/opt/mssql-tools18/bin/bcp`. It is used
+#     ONCE per cold start by `IngestionService.bootstrap_from_csv_if_empty`
+#     to bulk-load `/tmp/seed.csv` into `dbo.SensorReadings`. After the
+#     load completes the binary is unused for the lifetime of the
+#     process.
+#   * `pandas` joins the runtime deps — the transform that produces
+#     `/tmp/seed.csv` lives in `climasense_ml.ingestion`.
+#
+# Slice 2 changes (carried forward):
 #   * `datamodel-code-generator` runs at image-build time to regenerate
 #     `schemas/generated.py` from the bundled `contracts/openapi.yaml`.
 #     The regen is idempotent — rerunning a clean build produces zero
@@ -23,7 +33,16 @@ ENV PYTHONUNBUFFERED=1 \
     UV_LINK_MODE=copy \
     UV_PROJECT_ENVIRONMENT=/opt/venv
 
-# Microsoft ODBC Driver 18 for SQL Server.
+# Microsoft ODBC Driver 18 for SQL Server + mssql-tools18 (for `bcp`).
+#
+# `mssql-tools18` provides `bcp` and `sqlcmd` at /opt/mssql-tools18/bin/.
+# Slice 3's bootstrap (`IngestionService.bootstrap_from_csv_if_empty`)
+# shells out to `bcp` exactly once per cold start. The binary is not
+# used at runtime after the bulk load completes.
+#
+# ACCEPT_EULA=Y is required during the install layer; the EULA terms
+# are the standard Microsoft ODBC / mssql-tools licence carried over
+# from the slice-1 ODBC install.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl ca-certificates gnupg apt-transport-https \
@@ -33,8 +52,13 @@ RUN apt-get update \
         > /etc/apt/sources.list.d/mssql-release.list \
     && apt-get update \
     && ACCEPT_EULA=Y apt-get install -y --no-install-recommends \
-        msodbcsql18 unixodbc unixodbc-dev \
+        msodbcsql18 mssql-tools18 unixodbc unixodbc-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Surface bcp / sqlcmd on PATH so the bootstrap's `subprocess.run`
+# can resolve them by name even when callers don't use the absolute
+# /opt path.
+ENV PATH="/opt/mssql-tools18/bin:$PATH"
 
 WORKDIR /app
 
@@ -51,6 +75,7 @@ RUN uv venv /opt/venv \
         "pyodbc>=5.2,<6" \
         "pydantic>=2.9,<3" \
         "PyYAML>=6.0,<7" \
+        "pandas>=2.2,<4" \
         "datamodel-code-generator>=0.26,<1"
 
 # Contract first — codegen reads from /app/contracts/openapi.yaml.

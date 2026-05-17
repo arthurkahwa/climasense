@@ -16,8 +16,10 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Models (often heavy artefacts)
-models/
+# Models (heavy ML artefacts — top-level "models/" only; do NOT match
+# the Kiota-generated `Generated/MLClient/Models/` tree, which is
+# case-different on Linux but the same on macOS HFS+/APFS).
+/models/
 *.pt
 *.pkl
 *.joblib

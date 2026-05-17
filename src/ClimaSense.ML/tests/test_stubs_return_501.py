@@ -16,6 +16,8 @@ import os
 
 os.environ.setdefault("CLIMASENSE_HEALTH_SKIP_DB", "1")
 os.environ.setdefault("CLIMASENSE_CONTRACT_SKIP_VALIDATION", "1")
+# Slice 3: TestClient triggers the lifespan; skip the live bcp bootstrap.
+os.environ.setdefault("CLIMASENSE_SKIP_BOOTSTRAP", "1")
 
 import pathlib  # noqa: E402
 
@@ -27,12 +29,16 @@ from climasense_ml.main import app  # noqa: E402
 
 
 # Health endpoints are NOT 501 — they return real responses. Same for
-# the SSE alerts stream which lives on the .NET tier.
+# endpoints served only by the .NET web tier (SSE stream + slice-3's
+# /api/readings/latest read-path bypass).
 _REAL_ENDPOINTS = {
     ("/api/health/live", "get"),
     ("/api/health/ready", "get"),
     ("/api/health", "get"),
     ("/api/alerts/stream", "get"),
+    # Slice 3: declared in the contract for documentation + .NET
+    # codegen, but the read path bypasses the ml tier per ADR-0010.
+    ("/api/readings/latest", "get"),
 }
 
 

@@ -1,10 +1,10 @@
-# ClimaSense — cross-tier wire format (Slice 2 surface).
+# ClimaSense — cross-tier wire format (Slice 3 surface).
 #
 # This file is the source of truth for the .NET ↔ Python contract.
-# Slice 2 extends slice 1 with the ML-tier request/response surface that
-# later slices (#7–#11) will implement; for now every endpoint declared
-# here has a stub Python handler returning 501 Not Implemented, and the
-# .NET tier generates a Kiota client against it.
+# Slice 2 introduced the ML-tier request/response surface (forecast /
+# anomalies / profiles / comfort) as 501-stubs; slice 3 adds the first
+# read-path endpoint on the .NET tier — `GET /api/readings/latest` —
+# served directly from SQL Server without a hop through ml.
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
 # JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
@@ -14,7 +14,7 @@
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.2.0-slice-2
+  version: 0.3.0-slice-3
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
@@ -45,6 +45,12 @@ servers:
 tags:
   - name: health
     description: Liveness and readiness probes.
+  - name: readings
+    description: |
+      Raw `SensorReadings` reads. Served by the web tier directly from
+      SQL — the read path bypasses the ml tier entirely (per ADR-0010 /
+      PRD §"read-path bypass"). The contract entry exists so any client
+      generated from this YAML can call the endpoint type-safely.
   - name: forecast
     description: Lag-LR forecast emission and read endpoints.
   - name: anomalies
@@ -360,6 +366,42 @@ paths:
                 $ref: "#/components/schemas/ProblemDetails"
 
   # -------------------------------------------------------------------
+  # Readings — raw `SensorReadings` reads. Web tier only (read-path
+  # bypasses ml). Slice 3 ships /latest; slice 4 (#6) adds /range and
+  # /heatmap.
+  # -------------------------------------------------------------------
+  /api/readings/latest:
+    get:
+      summary: Return the most recent `SensorReadings` row at the cursor.
+      description: |
+        Returns the row with the largest `ReadingTime` that is
+        less-than-or-equal-to the current cursor. The web tier reads
+        SQL Server directly — the ml container is NOT invoked. Under
+        `WallClock` the cursor equals wall-clock UTC; under
+        `ReplayClock` (slice 12) the cursor walks the data's time
+        domain and this endpoint reflects the cursor's position.
+
+        Returns 404 when `SensorReadings` is empty (e.g. bootstrap has
+        not yet completed). The slice-3 bootstrap blocks readiness via
+        `/api/health/ready` on the ml tier, so a healthy compose stack
+        never serves 404 here.
+      operationId: getReadingsLatest
+      tags: [readings]
+      responses:
+        "200":
+          description: Latest reading at the cursor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LatestReading"
+        "404":
+          description: SensorReadings is empty (bootstrap incomplete).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  # -------------------------------------------------------------------
   # SSE — registered on the web tier; documented here so the contract
   # captures the complete cross-tier wire surface.
   # -------------------------------------------------------------------
@@ -421,6 +463,36 @@ components:
           additionalProperties:
             $ref: "#/components/schemas/Checks"
           description: Per-dependency probe outcomes (db, ml, etc.).
+
+    # -----------------------------------------------------------------
+    # LatestReading — slice-3 read shape. The wire field names are
+    # unit-tagged (`temperatureC`, `humidityPct`) so the dashboard's
+    # JavaScript can render units without re-deriving them from headers.
+    # The web tier's `SensorDataService.GetLatestAsync` returns this
+    # shape directly from `SELECT TOP 1 … ORDER BY ReadingTime DESC`
+    # clipped at the cursor (`WHERE ReadingTime <= @asOf`).
+    # -----------------------------------------------------------------
+    LatestReading:
+      type: object
+      additionalProperties: false
+      required: [readingTime, temperatureC, humidityPct]
+      properties:
+        readingTime:
+          type: string
+          format: date-time
+          description: Timestamp of the latest reading (UTC).
+        temperatureC:
+          type: number
+          format: double
+          description: Temperature in degrees Celsius.
+          example: 21.5
+        humidityPct:
+          type: number
+          format: double
+          description: Relative humidity as a percentage (0–100).
+          minimum: 0
+          maximum: 100
+          example: 47.0
 
     # -----------------------------------------------------------------
     # ProblemDetails — RFC 7807-shaped error body used uniformly across
