@@ -14,7 +14,17 @@
       "Bash(git -C /Users/arthur/Developer/github/arthurkahwa/climasense log --oneline -5)",
       "Bash(git add *)",
       "Bash(git -c commit.gpgsign=false commit -m ' *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(dotnet --version)",
+      "Bash(dotnet --list-sdks)",
+      "Bash(dotnet --list-runtimes)",
+      "Bash(dotnet --info)",
+      "Bash(brew list *)",
+      "Bash(gh pr *)",
+      "Bash(docker info *)",
+      "Bash(docker compose *)",
+      "Bash(docker exec *)",
+      "Bash(curl -fsS --no-buffer -N --max-time 35 http://127.0.0.1:8080/api/alerts/stream)"
     ]
   }
 }
