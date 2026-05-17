@@ -6,6 +6,7 @@ using ClimaSense.Web.Generated.MLClient.Api.Comfort;
 using ClimaSense.Web.Generated.MLClient.Api.Forecast;
 using ClimaSense.Web.Generated.MLClient.Api.Health;
 using ClimaSense.Web.Generated.MLClient.Api.Profiles;
+using ClimaSense.Web.Generated.MLClient.Api.Readings;
 using Microsoft.Kiota.Abstractions.Extensions;
 using Microsoft.Kiota.Abstractions;
 using System.Collections.Generic;
@@ -49,6 +50,11 @@ namespace ClimaSense.Web.Generated.MLClient.Api
         public global::ClimaSense.Web.Generated.MLClient.Api.Profiles.ProfilesRequestBuilder Profiles
         {
             get => new global::ClimaSense.Web.Generated.MLClient.Api.Profiles.ProfilesRequestBuilder(PathParameters, RequestAdapter);
+        }
+        /// <summary>The readings property</summary>
+        public global::ClimaSense.Web.Generated.MLClient.Api.Readings.ReadingsRequestBuilder Readings
+        {
+            get => new global::ClimaSense.Web.Generated.MLClient.Api.Readings.ReadingsRequestBuilder(PathParameters, RequestAdapter);
         }
         /// <summary>
         /// Instantiates a new <see cref="global::ClimaSense.Web.Generated.MLClient.Api.ApiRequestBuilder"/> and sets the default values.

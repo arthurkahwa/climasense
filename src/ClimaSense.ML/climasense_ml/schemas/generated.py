@@ -54,6 +54,29 @@ class HealthStatus(BaseModel):
     )
 
 
+class LatestReading(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    reading_time: AwareDatetime = Field(
+        ..., alias="readingTime", description="Timestamp of the latest reading (UTC)."
+    )
+    temperature_c: float = Field(
+        ...,
+        alias="temperatureC",
+        description="Temperature in degrees Celsius.",
+        examples=[21.5],
+    )
+    humidity_pct: float = Field(
+        ...,
+        alias="humidityPct",
+        description="Relative humidity as a percentage (0–100).",
+        examples=[47.0],
+        ge=0.0,
+        le=100.0,
+    )
+
+
 class ProblemDetails(BaseModel):
     model_config = ConfigDict(
         extra="forbid",

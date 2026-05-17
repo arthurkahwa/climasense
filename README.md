@@ -10,7 +10,13 @@
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-WIP-orange)
 
-> ⚠️ **Work in progress.** The analysis notebook is complete; the platform is being built one slice at a time (see [issue #2](https://github.com/arthurkahwa/climasense/issues/2)). **Slice 1 (foundation)** has landed: `docker-compose.yml` boots SQL Server 2022 + an empty FastAPI ML placeholder + an empty .NET web placeholder; both apps emit structured JSON logs with `X-Request-ID` correlation; the `AlertStream` SSE singleton heartbeats to a placeholder Razor page; `CursorSnapshot` and `IClock` are wired in both tiers. APIs, code paths, and feature work in the slices below are planned, not yet implemented. Expect breaking changes.
+> ⚠️ **Work in progress.** The analysis notebook is complete; the platform is being built one slice at a time (see [issue #2](https://github.com/arthurkahwa/climasense/issues/2)). **Slices 1–3 have landed:**
+>
+> * Slice 1 — `docker-compose.yml` boots SQL Server 2022 + FastAPI ML + .NET web; structured JSON logs with `X-Request-ID` correlation; `AlertStream` SSE singleton heartbeating to a Razor page; `CursorSnapshot` and `IClock` wired in both tiers.
+> * Slice 2 — `contracts/openapi.yaml` is the wire-format source of truth; Kiota generates the .NET client and `datamodel-codegen` generates the Pydantic models; FastAPI's `ContractValidator` fails the process on any drift; five `/api/ml/*` proxy endpoints exercise the failure-mapping pipeline (503 / 502 / 504 with `ProblemDetails`).
+> * Slice 3 — `IngestionService` bootstraps `SensorReadings` from the bundled `sensor_data.csv` via `bcp` on first boot (~35 s for 2.45 M deduped rows); idempotent on subsequent boots. `GET /api/readings/latest` and a dashboard "Latest reading" card go live (read path bypasses the ml tier per ADR-0010).
+>
+> APIs, code paths, and feature work in slices 4+ below are planned, not yet implemented. Expect breaking changes.
 
 ---
 

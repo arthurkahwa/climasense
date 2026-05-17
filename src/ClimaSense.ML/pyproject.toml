@@ -1,7 +1,7 @@
 [project]
 name = "climasense-ml"
-version = "0.2.0"
-description = "ClimaSense ML tier (FastAPI). Slice 2: OpenAPI contract + codegen + stubs."
+version = "0.3.0"
+description = "ClimaSense ML tier (FastAPI). Slice 3: CSV bootstrap via bcp + latest-reading endpoint."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
@@ -16,6 +16,9 @@ dependencies = [
     "pydantic>=2.9,<3",
     # ContractValidator parses contracts/openapi.yaml at startup.
     "PyYAML>=6.0,<7",
+    # Slice 3: pandas drives the CSV transform that precedes the bcp
+    # bulk load (`IngestionService.bootstrap_from_csv_if_empty`).
+    "pandas>=2.2,<4",
 ]
 
 [project.optional-dependencies]

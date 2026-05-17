@@ -1,14 +1,25 @@
-# ClimaSense — three-tier compose stack (Slice 1 foundation).
+# ClimaSense — three-tier compose stack (Slice 3: bcp bootstrap).
 #
 # - `db`:  SQL Server 2022. Network-internal only. `init-db.sql` is applied
 #          idempotently by an init-runner sidecar.
-# - `ml`:  FastAPI placeholder. Network-internal only. Slice 1 only exposes
-#          /api/health/{live,ready}.
-# - `web`: ASP.NET Core placeholder. Published on 127.0.0.1:8080 ONLY.
-#          Hosts the placeholder dashboard + SSE heartbeat plumbing.
+# - `ml`:  FastAPI tier. Network-internal only. Owns CSV bootstrap (via
+#          bcp on first boot) + the slice-2 stubs. `/api/health/ready`
+#          gates on bootstrap completion so dependents don't see an
+#          empty `SensorReadings` table.
+# - `web`: ASP.NET Core tier. Published on 127.0.0.1:8080 ONLY.
+#          Slice 3 ships the latest-reading dashboard widget at /;
+#          subsequent slices replace it with the full dashboard.
 #
 # Per issue #3 the host port-map is intentionally narrow: do NOT publish 1433
 # or any ml port. Reviewers reach the system through web only.
+#
+# Slice 3 additions:
+#   * `sensor_data.csv` is bind-mounted INTO the `ml` container so
+#     `IngestionService.bootstrap_from_csv_if_empty()` can stream it
+#     through pandas, write `/tmp/seed.csv`, and shell out to `bcp`
+#     for a ~30-90 s bulk load (2.45 M deduped rows).
+#   * The `ml` healthcheck `start_period` was already 300 s in slice 1;
+#     it tolerates the bootstrap window comfortably.
 
 name: climasense
 
@@ -82,6 +93,16 @@ services:
       CLIMASENSE_DB_USER: sa
       CLIMASENSE_DB_PASSWORD: "${MSSQL_SA_PASSWORD}"
       LOG_LEVEL: "${PYTHON_LOG_LEVEL}"
+      # Slice 3: the bootstrap reads `sensor_data.csv` from the
+      # bind-mount below and writes the transformed seed to /tmp.
+      CLIMASENSE_BOOTSTRAP_CSV: "/data/sensor_data.csv"
+      CLIMASENSE_SEED_CSV: "/tmp/seed.csv"
+    volumes:
+      # Read-only bind mount of the bundled CSV. The repo-root file is
+      # 116 MB and is .gitignored; reviewers fetch it separately per the
+      # README. The mount is read-only because the bootstrap only ever
+      # streams the file through pandas.
+      - ./sensor_data.csv:/data/sensor_data.csv:ro
     depends_on:
       db:
         condition: service_healthy
@@ -89,6 +110,10 @@ services:
         condition: service_completed_successfully
     # No `ports:` — ml is network-internal. .NET reaches it via http://ml:8000.
     healthcheck:
+      # Slice 3: /api/health/ready returns 503 with bootstrap=in_progress
+      # while bcp runs, then flips to 200 with bootstrap=complete. The
+      # 300 s start_period from slice 1 covers the 30-90 s bootstrap
+      # comfortably with retries in reserve.
       test:
         - "CMD-SHELL"
         - "python -c 'import urllib.request,sys; sys.exit(0 if urllib.request.urlopen(\"http://localhost:8000/api/health/ready\", timeout=3).status==200 else 1)'"

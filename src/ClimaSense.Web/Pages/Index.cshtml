@@ -8,7 +8,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ClimaSense — slice 1 placeholder</title>
+    <title>ClimaSense — slice 3 dashboard</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -40,6 +40,53 @@
             padding: 1rem 1.25rem;
             margin: 1rem 0;
         }
+        /* Slice 3: latest-reading card */
+        .latest-card {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            align-items: center;
+            background: linear-gradient(145deg, #161b22, #0d1117);
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 1.5rem 2rem;
+            margin: 1rem 0 2rem 0;
+        }
+        .latest-card .reading {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+        .latest-card .label {
+            color: #8b949e;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .latest-card .value {
+            font-size: 3rem;
+            font-weight: 600;
+            color: #f0f6fc;
+            line-height: 1;
+        }
+        .latest-card .value .unit {
+            font-size: 1.5rem;
+            font-weight: 400;
+            color: #8b949e;
+            margin-left: 0.25rem;
+        }
+        .latest-card .meta {
+            grid-column: 1 / -1;
+            color: #8b949e;
+            font-size: 0.85rem;
+            border-top: 1px solid #30363d;
+            padding-top: 0.75rem;
+        }
+        .latest-card.error .value {
+            color: #f85149;
+            font-size: 1.5rem;
+            font-weight: 500;
+        }
         .heartbeat-counter {
             font-size: 2rem;
             font-weight: 600;
@@ -56,15 +103,41 @@
     </style>
 </head>
 <body>
-    <h1>ClimaSense — slice 1 foundation placeholder</h1>
+    <h1>ClimaSense — slice 3 dashboard</h1>
 
     <p>
-        This page proves the SSE plumbing works end-to-end. It subscribes to
-        <code>/api/alerts/stream</code> and counts <code>server-tick</code>
-        events. Slices 5+ replace this with the real dashboard.
+        Slice 3 adds the first live read: the latest
+        <code>SensorReadings</code> row served by the .NET tier
+        directly from SQL (no ml-tier hop). The
+        heartbeat counter below remains as the SSE plumbing smoke test
+        from slice 1; later slices replace this whole page with the
+        proper dashboard.
     </p>
 
+    <!-- ============================================== -->
+    <!-- Slice 3: latest-reading card                  -->
+    <!-- ============================================== -->
+    <section class="latest-card" id="latest-card">
+        <div class="reading">
+            <span class="label">Temperature</span>
+            <span class="value">
+                <span id="latest-temp">&hellip;</span><span class="unit">&deg;C</span>
+            </span>
+        </div>
+        <div class="reading">
+            <span class="label">Humidity</span>
+            <span class="value">
+                <span id="latest-humidity">&hellip;</span><span class="unit">%</span>
+            </span>
+        </div>
+        <div class="meta" id="latest-meta">
+            Fetching latest reading from
+            <code>/api/readings/latest</code>&hellip;
+        </div>
+    </section>
+
     <section class="panel">
+        <strong>Heartbeat (slice-1 SSE smoke test)</strong>
         <div class="heartbeat-counter" id="tick-count">0</div>
         <div class="heartbeat-meta">
             <span id="last-tick-ts">awaiting first heartbeat&hellip;</span>
@@ -74,20 +147,114 @@
     </section>
 
     <section class="panel">
-        <strong>What slice 1 ships</strong>
+        <strong>What slice 3 ships</strong>
         <ul class="legend">
-            <li>SQL Server 2022 with the canonical schema applied
-                (<code>scripts/init-db.sql</code>).</li>
-            <li>FastAPI placeholder with <code>/api/health/{live,ready}</code>.</li>
-            <li>This .NET tier with the same two health probes, structured JSON
-                logs, an <code>X-Request-ID</code> middleware, and the
-                <code>AlertStream</code> SSE singleton.</li>
-            <li><code>CursorSnapshot</code> registered as a per-request
-                scoped DI service in both tiers.</li>
+            <li>One-shot CSV bootstrap via <code>bcp</code> on first
+                <code>docker compose up</code>. Idempotent — subsequent
+                boots skip when <code>SensorReadings</code> already
+                has rows.</li>
+            <li><code>GET /api/readings/latest</code> served by the
+                .NET tier directly from SQL Server (read-path bypass
+                per ADR-0010).</li>
+            <li>The card above is hydrated by a single
+                <code>fetch('/api/readings/latest')</code> on page load.
+                No polling, no SSE — the dashboard auto-refresh story
+                lands with the replay clock in slice 12.</li>
         </ul>
     </section>
 
     <script>
+        // ----------------------------------------------------------------
+        // Slice 3: latest reading
+        // ----------------------------------------------------------------
+        (function () {
+            var tempEl = document.getElementById('latest-temp');
+            var humidityEl = document.getElementById('latest-humidity');
+            var metaEl = document.getElementById('latest-meta');
+            var cardEl = document.getElementById('latest-card');
+
+            function formatTimestamp(iso) {
+                try {
+                    var d = new Date(iso);
+                    return d.toLocaleString(undefined, {
+                        year: 'numeric', month: 'short', day: '2-digit',
+                        hour: '2-digit', minute: '2-digit',
+                        timeZoneName: 'short',
+                    });
+                } catch (e) {
+                    return iso;
+                }
+            }
+
+            // textContent-only meta rendering. Avoids innerHTML so the
+            // server-supplied readingTime can never inject markup even
+            // if a future change starts shipping it from the wire as
+            // a string we don't trust.
+            function renderMeta(body) {
+                while (metaEl.firstChild) {
+                    metaEl.removeChild(metaEl.firstChild);
+                }
+                metaEl.appendChild(document.createTextNode('as of '));
+                var ts = document.createElement('strong');
+                ts.textContent = formatTimestamp(body.readingTime);
+                metaEl.appendChild(ts);
+                metaEl.appendChild(document.createTextNode(' · source: '));
+                var code = document.createElement('code');
+                code.textContent = 'SensorReadings';
+                metaEl.appendChild(code);
+                metaEl.appendChild(document.createTextNode(
+                    ' (row with largest ReadingTime ≤ cursor)'));
+            }
+
+            function renderError(message) {
+                cardEl.classList.add('error');
+                // Replace temperature / humidity values with em-dashes.
+                var tempParent = tempEl.parentElement;
+                while (tempParent.firstChild) {
+                    tempParent.removeChild(tempParent.firstChild);
+                }
+                tempParent.textContent = '—';
+                var humParent = humidityEl.parentElement;
+                while (humParent.firstChild) {
+                    humParent.removeChild(humParent.firstChild);
+                }
+                humParent.textContent = '—';
+                metaEl.textContent =
+                    '/api/readings/latest failed: ' + message;
+            }
+
+            fetch('/api/readings/latest', { headers: { 'Accept': 'application/json' } })
+                .then(function (resp) {
+                    if (!resp.ok) {
+                        return resp.json().then(function (body) {
+                            throw {
+                                status: resp.status,
+                                error: body && body.error,
+                                message: body && body.message
+                            };
+                        }, function () {
+                            throw {
+                                status: resp.status,
+                                error: 'http_error',
+                                message: 'HTTP ' + resp.status
+                            };
+                        });
+                    }
+                    return resp.json();
+                })
+                .then(function (body) {
+                    tempEl.textContent = (body.temperatureC).toFixed(1);
+                    humidityEl.textContent = (body.humidityPct).toFixed(1);
+                    renderMeta(body);
+                })
+                .catch(function (err) {
+                    renderError(err && err.message ? err.message : 'unknown error');
+                });
+        })();
+
+        // ----------------------------------------------------------------
+        // Slice 1: SSE heartbeat (kept as smoke test for slice-1 plumbing)
+        // ----------------------------------------------------------------
         (function () {
             var counter = document.getElementById('tick-count');
             var lastTick = document.getElementById('last-tick-ts');

@@ -98,10 +98,25 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
     _DROP_KEYS = {"description", "summary", "example", "examples", "tags"}
     # Schemas that FastAPI synthesises from `Body()` / `Query()`
     # validation but the hand-authored contract has no reason to declare.
-    _DROP_SCHEMAS = {"HTTPValidationError", "ValidationError"}
+    # We ALSO drop schemas that belong exclusively to web-tier-only
+    # endpoints (the ml tier has no handler that references them, so
+    # FastAPI never emits them — that's correct, not a contract drift).
+    _DROP_SCHEMAS = {
+        "HTTPValidationError",
+        "ValidationError",
+        # Slice 3: only referenced by /api/readings/latest (web-tier only).
+        "LatestReading",
+    }
     # Paths declared in the contract for cross-tier audit purposes but
     # NOT served by the FastAPI ml tier (they live on the .NET web tier).
-    _ML_TIER_EXCLUDED_PATHS = {"/api/alerts/stream"}
+    _ML_TIER_EXCLUDED_PATHS = {
+        "/api/alerts/stream",
+        # Slice 3: read-path bypass — web tier reads SensorReadings
+        # directly. The ml tier never serves this; the contract entry
+        # exists so Kiota generates a typed client and the dashboard's
+        # wire shape is documented in one place.
+        "/api/readings/latest",
+    }
 
     def _strip(node: Any) -> Any:
         if isinstance(node, dict):
