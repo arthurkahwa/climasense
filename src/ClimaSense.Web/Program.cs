@@ -96,6 +96,27 @@ builder.Services.AddScoped<SensorDataService>(sp =>
 });
 
 // ---------------------------------------------------------------------
+// Readings — slice 4. RangeQueryService follows the slice-3 delegate
+// pattern with two seams (RangeFetcher + HeatmapFetcher). The raw-window
+// cap is read from CLIMASENSE_RAW_MAX_DAYS, defaulting to 7.
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<SqlRangeFetcher>();
+builder.Services.AddScoped<RangeQueryService>(sp =>
+{
+    var sqlFetcher = sp.GetRequiredService<SqlRangeFetcher>();
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var rawMaxDays = int.TryParse(
+        cfg["CLIMASENSE_RAW_MAX_DAYS"],
+        out var parsed) && parsed > 0
+        ? parsed
+        : RangeQueryService.DefaultRawMaxDays;
+    return new RangeQueryService(
+        sqlFetcher.FetchRangeAsync,
+        sqlFetcher.FetchHeatmapAsync,
+        rawMaxDays);
+});
+
+// ---------------------------------------------------------------------
 // Razor Pages — single placeholder Index page.
 // ---------------------------------------------------------------------
 builder.Services.AddRazorPages();
@@ -145,6 +166,89 @@ app.MapGet("/api/readings/latest", async (
             statusCode: StatusCodes.Status404NotFound);
     }
     return Results.Json(latest, statusCode: StatusCodes.Status200OK);
+});
+
+// ---------------------------------------------------------------------
+// Readings — slice 4. /range + /heatmap. Both bypass the ml tier and
+// are cursor-clipped at the service layer (see RangeQueryService).
+// ---------------------------------------------------------------------
+app.MapGet("/api/readings/range", async (
+    HttpContext ctx,
+    RangeQueryService rangeQueries,
+    CursorSnapshot cursor,
+    string? start,
+    string? end,
+    string? bucket,
+    CancellationToken cancellationToken) =>
+{
+    if (!TryParseUtc(start, out var startUtc))
+    {
+        return BadRequest(ctx,
+            error: "invalid_start",
+            message: "`start` must be an ISO 8601 UTC timestamp.");
+    }
+    if (!TryParseUtc(end, out var endUtc))
+    {
+        return BadRequest(ctx,
+            error: "invalid_end",
+            message: "`end` must be an ISO 8601 UTC timestamp.");
+    }
+
+    var bucketLiteral = string.IsNullOrWhiteSpace(bucket) ? "hour" : bucket;
+    if (!RangeBucketExtensions.TryParseWire(bucketLiteral, out var bucketEnum))
+    {
+        return BadRequest(ctx,
+            error: "invalid_bucket",
+            message: "`bucket` must be one of: raw, hour, day, week.");
+    }
+
+    var args = new RangeQueryArgs(startUtc, endUtc, bucketEnum);
+    var validation = rangeQueries.ValidateAndClip(cursor, args, out _, out _);
+    switch (validation)
+    {
+        case RangeQueryError.StartAfterEnd:
+            return BadRequest(ctx,
+                error: "start_after_end",
+                message: "`start` must be on or before `end`.");
+        case RangeQueryError.RawWindowTooLarge:
+            return BadRequest(ctx,
+                error: "range_too_large",
+                message:
+                    "`raw` requests are capped at "
+                    + rangeQueries.RawMaxDays
+                    + " days. Use bucket=hour, day, or week for wider windows.");
+    }
+
+    var response = await rangeQueries
+        .GetRangeAsync(cursor, args, cancellationToken)
+        .ConfigureAwait(false);
+    return Results.Json(response, statusCode: StatusCodes.Status200OK);
+});
+
+app.MapGet("/api/readings/heatmap", async (
+    HttpContext ctx,
+    RangeQueryService rangeQueries,
+    CursorSnapshot cursor,
+    int? year,
+    CancellationToken cancellationToken) =>
+{
+    if (year is null)
+    {
+        return BadRequest(ctx,
+            error: "missing_year",
+            message: "Query parameter `year` is required.");
+    }
+    if (year is < 1900 or > 2100)
+    {
+        return BadRequest(ctx,
+            error: "invalid_year",
+            message: "`year` must be between 1900 and 2100.");
+    }
+
+    var response = await rangeQueries
+        .GetHeatmapAsync(cursor, year.Value, cancellationToken)
+        .ConfigureAwait(false);
+    return Results.Json(response, statusCode: StatusCodes.Status200OK);
 });
 
 // Liveness — process up.
@@ -288,6 +392,46 @@ static string BuildConnectionString(IConfiguration config)
         ConnectTimeout = 5,
     };
     return b.ConnectionString;
+}
+
+// ---------------------------------------------------------------------
+// Slice-4 helpers — ISO 8601 parsing for query-string timestamps and a
+// uniform 400 response shape. The 400 body mirrors the slice-3 404 body
+// (error / message / requestId) so the dashboard handler has one
+// rendering path for "bad request" outcomes.
+// ---------------------------------------------------------------------
+static bool TryParseUtc(string? raw, out DateTime utc)
+{
+    if (string.IsNullOrWhiteSpace(raw))
+    {
+        utc = default;
+        return false;
+    }
+
+    if (DateTime.TryParse(
+            raw,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal
+                | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out var parsed))
+    {
+        utc = DateTime.SpecifyKind(parsed, DateTimeKind.Utc);
+        return true;
+    }
+    utc = default;
+    return false;
+}
+
+static IResult BadRequest(HttpContext ctx, string error, string message)
+{
+    return Results.Json(
+        new
+        {
+            error,
+            message,
+            requestId = RequestIdMiddleware.Get(ctx),
+        },
+        statusCode: StatusCodes.Status400BadRequest);
 }
 
 /// <summary>

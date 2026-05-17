@@ -1,0 +1,218 @@
+@page "/Explorer"
+@model ClimaSense.Web.Pages.ExplorerModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ClimaSense — Historical Explorer</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 2rem;
+            line-height: 1.5;
+        }
+        h1 {
+            color: #58a6ff;
+            font-weight: 500;
+            margin-top: 0;
+        }
+        a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+        a:hover { text-decoration: underline; }
+        nav.crumbs {
+            color: #8b949e;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+        section.panel {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+        }
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            align-items: center;
+        }
+        .control-group {
+            display: flex;
+            gap: 0.4rem;
+            align-items: center;
+            padding: 0.4rem 0.6rem;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 6px;
+        }
+        .control-group .label {
+            color: #8b949e;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin-right: 0.25rem;
+        }
+        button.toggle {
+            background: transparent;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            padding: 0.3rem 0.6rem;
+            font-size: 0.9rem;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        button.toggle:hover {
+            border-color: #58a6ff;
+            color: #58a6ff;
+        }
+        button.toggle.selected {
+            background: #58a6ff;
+            color: #0d1117;
+            border-color: #58a6ff;
+        }
+        input[type="datetime-local"], input[type="number"] {
+            background: #0d1117;
+            color: #c9d1d9;
+            border: 1px solid #30363d;
+            border-radius: 4px;
+            padding: 0.3rem 0.4rem;
+            font-family: inherit;
+            font-size: 0.9rem;
+        }
+        .status {
+            color: #8b949e;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+        .meta {
+            color: #8b949e;
+            font-size: 0.8rem;
+            margin-top: 0.5rem;
+        }
+        .chart-host {
+            width: 100%;
+            min-height: 420px;
+        }
+        .heatmap-host {
+            width: 100%;
+            min-height: 260px;
+        }
+        #explorer-toast {
+            position: fixed;
+            right: 1.5rem;
+            bottom: 1.5rem;
+            background: #161b22;
+            color: #f0f6fc;
+            border: 1px solid #f85149;
+            border-radius: 6px;
+            padding: 0.6rem 0.9rem;
+            font-size: 0.85rem;
+            opacity: 0;
+            transform: translateY(8px);
+            transition: opacity 0.2s, transform 0.2s;
+            pointer-events: none;
+            max-width: 24rem;
+        }
+        #explorer-toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body>
+    <nav class="crumbs">
+        <a href="/">Dashboard</a> · Historical Explorer
+    </nav>
+    <h1>Historical Explorer</h1>
+
+    <p style="color:#8b949e;max-width:60rem;">
+        Pan, zoom, and aggregate any portion of the
+        <code>SensorReadings</code> history. Range queries are served
+        directly from SQL Server via <code>DATE_BUCKET</code>; the heatmap
+        below is a GitHub-contribution-style daily-mean calendar for the
+        selected year. Both endpoints are
+        <code>cursor</code>-clipped — under <em>ReplayClock</em>
+        (slice 12) the view reflects only what is visible at the cursor's
+        position.
+    </p>
+
+    <!-- ============================================== -->
+    <!-- Controls                                        -->
+    <!-- ============================================== -->
+    <section class="panel">
+        <div class="controls">
+            <div class="control-group" id="range-buttons">
+                <span class="label">Range</span>
+                <button class="toggle" data-range="1D">1D</button>
+                <button class="toggle" data-range="1W">1W</button>
+                <button class="toggle" data-range="1M">1M</button>
+                <button class="toggle" data-range="3M">3M</button>
+                <button class="toggle" data-range="1Y">1Y</button>
+                <button class="toggle" data-range="ALL">ALL</button>
+            </div>
+
+            <div class="control-group">
+                <span class="label">Custom</span>
+                <input type="datetime-local" id="custom-start" step="60" />
+                <span style="color:#8b949e;">→</span>
+                <input type="datetime-local" id="custom-end" step="60" />
+                <button class="toggle" id="custom-apply">Apply</button>
+            </div>
+
+            <div class="control-group" id="bucket-buttons">
+                <span class="label">Bucket</span>
+                <button class="toggle" data-bucket="raw">Raw</button>
+                <button class="toggle" data-bucket="hour">Hourly</button>
+                <button class="toggle" data-bucket="day">Daily</button>
+                <button class="toggle" data-bucket="week">Weekly</button>
+            </div>
+        </div>
+        <div class="status" id="explorer-status">awaiting first query&hellip;</div>
+    </section>
+
+    <!-- ============================================== -->
+    <!-- Time-series chart                              -->
+    <!-- ============================================== -->
+    <section class="panel">
+        <div id="explorer-timeseries" class="chart-host"></div>
+        <div class="meta" id="explorer-meta">no data yet</div>
+    </section>
+
+    <!-- ============================================== -->
+    <!-- Heatmap                                        -->
+    <!-- ============================================== -->
+    <section class="panel">
+        <div style="display:flex;gap:1rem;align-items:center;margin-bottom:0.5rem;">
+            <strong>GitHub-style calendar heatmap</strong>
+            <div class="control-group">
+                <span class="label">Year</span>
+                <input type="number" id="heatmap-year" min="1900" max="2100" step="1" />
+            </div>
+            <span class="meta" id="heatmap-meta">no data yet</span>
+        </div>
+        <div id="explorer-heatmap" class="heatmap-host"></div>
+    </section>
+
+    <div id="explorer-toast" role="status" aria-live="polite"></div>
+
+    <!--
+        Plotly.js — slice 4 ships via CDN (~3 MB minified). To run
+        air-gapped, vendor the file to wwwroot/lib/plotly.min.js and
+        swap the src. See wwwroot/js/plotly-config.js for the rationale.
+    -->
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+    <script src="~/js/plotly-config.js"></script>
+    <script src="~/js/explorer.js"></script>
+</body>
+</html>

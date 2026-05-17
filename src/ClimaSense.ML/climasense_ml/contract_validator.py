@@ -106,6 +106,13 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         "ValidationError",
         # Slice 3: only referenced by /api/readings/latest (web-tier only).
         "LatestReading",
+        # Slice 4: only referenced by /api/readings/range and
+        # /api/readings/heatmap (web-tier only).
+        "RangeBucket",
+        "BucketedReading",
+        "BucketedReadingsResponse",
+        "HeatmapCell",
+        "HeatmapResponse",
     }
     # Paths declared in the contract for cross-tier audit purposes but
     # NOT served by the FastAPI ml tier (they live on the .NET web tier).
@@ -116,6 +123,10 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # exists so Kiota generates a typed client and the dashboard's
         # wire shape is documented in one place.
         "/api/readings/latest",
+        # Slice 4: same rationale — historical-Explorer reads bypass
+        # the ml tier entirely (DATE_BUCKET runs on SQL Server).
+        "/api/readings/range",
+        "/api/readings/heatmap",
     }
 
     def _strip(node: Any) -> Any:

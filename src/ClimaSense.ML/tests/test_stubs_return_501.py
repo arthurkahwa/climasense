@@ -39,6 +39,9 @@ _REAL_ENDPOINTS = {
     # Slice 3: declared in the contract for documentation + .NET
     # codegen, but the read path bypasses the ml tier per ADR-0010.
     ("/api/readings/latest", "get"),
+    # Slice 4: range + heatmap, same web-tier-only rationale.
+    ("/api/readings/range", "get"),
+    ("/api/readings/heatmap", "get"),
 }
 
 
