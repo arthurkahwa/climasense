@@ -447,7 +447,7 @@ sequenceDiagram
     RO->>RO: severity = |y_t − ŷ_t| / rolling_σ
     RO->>D: INSERT Anomalies (AnomalyType = residual_outlier)
 
-    Note over S,D: Each detector writes its own typed rows; the Last anomaly card on the dashboard reflects new rows on next load
+    Note over S,D: Each detector writes its own typed rows.<br/>The Last anomaly card on the dashboard reflects new rows on next load.
 ```
 
 ### Replay-cursor advance and threshold alert delivery
