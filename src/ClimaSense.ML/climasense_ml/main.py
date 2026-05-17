@@ -59,6 +59,7 @@ from .forecast_emitter import ForecastEmitter
 from .forecast_router import build_router as build_forecast_router
 from .forecaster import LagLinearForecaster, load_hourly_from_sql
 from .ingestion import BcpUnavailableError, IngestionService
+from .leaderboard import LeaderboardSeeder, SeedResult
 from .logging_setup import configure as configure_logging
 from .logging_setup import reset_request_id, set_request_id
 from .schemas import HealthStatus, HealthStatusEnum
@@ -207,6 +208,73 @@ def get_forecaster() -> LagLinearForecaster | None:
     return _forecaster_tracker.forecaster
 
 
+# ---------------------------------------------------------------------
+# Leaderboard seeder state machine (slice 6).
+#
+# Mirrors the bootstrap and forecaster trackers. The seeder runs once
+# per lifespan, after the boot-fit completes (the live row needs a
+# fitted forecaster). States:
+#
+#   * "pending"  — lifespan hasn't reached the seeder yet.
+#   * "seeding"  — the MERGE pipeline is running.
+#   * "complete" — both notebook + live rows are MERGEd successfully.
+#   * "failed"   — any exception during seeding (DB error, missing
+#                  results.json, parse failure). Captured for the
+#                  readiness probe; the seeder does NOT block readiness
+#                  because the leaderboard is a UI concern, not a wire
+#                  contract concern. The readiness probe reports
+#                  `leaderboard=fail` and FastAPI still gate-opens.
+#   * "skipped"  — disabled via CLIMASENSE_SKIP_LEADERBOARD_SEED.
+# ---------------------------------------------------------------------
+LeaderboardSeedState = Literal["pending", "seeding", "complete", "failed", "skipped"]
+
+
+class _LeaderboardTracker:
+    """Process-singleton holder for leaderboard-seeding state. Thread-safe."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._state: LeaderboardSeedState = "pending"
+        self._detail: str = "leaderboard seed has not been attempted yet"
+        self._result: SeedResult | None = None
+
+    @property
+    def state(self) -> LeaderboardSeedState:
+        with self._lock:
+            return self._state
+
+    @property
+    def detail(self) -> str:
+        with self._lock:
+            return self._detail
+
+    @property
+    def result(self) -> SeedResult | None:
+        with self._lock:
+            return self._result
+
+    def mark(
+        self,
+        state: LeaderboardSeedState,
+        *,
+        detail: str,
+        result: SeedResult | None = None,
+    ) -> None:
+        with self._lock:
+            self._state = state
+            self._detail = detail
+            if result is not None:
+                self._result = result
+
+
+_leaderboard_tracker = _LeaderboardTracker()
+
+
+def get_leaderboard_state() -> _LeaderboardTracker:
+    """Public accessor — used by the readiness probe and tests."""
+    return _leaderboard_tracker
+
+
 def _build_ingestion_service() -> IngestionService:
     """Construct an `IngestionService` wired against the real DB engine
     and the container-installed `bcp` binary.
@@ -262,6 +330,75 @@ def _build_ingestion_service() -> IngestionService:
         bcp_runner=_run_bcp,
         bcp_settings=bcp_settings,
     )
+
+
+def _resolve_results_json() -> pathlib.Path:
+    """Find `assets/results.json` for the leaderboard seeder.
+
+    Mirrors `contract_validator._resolve_contract_path`: honour the
+    env override first, then walk up from this module looking for
+    `assets/results.json`. The container layout puts the file at
+    `/app/assets/results.json` (copied in the Dockerfile); the
+    developer layout puts it at repo-root.
+    """
+    override = os.environ.get("CLIMASENSE_RESULTS_JSON")
+    if override:
+        return pathlib.Path(override)
+    here = pathlib.Path(__file__).resolve()
+    for ancestor in [here, *here.parents]:
+        candidate = ancestor / "assets" / "results.json"
+        if candidate.is_file():
+            return candidate
+    # Fallback to the container layout even if not present yet — the
+    # caller will surface a clean FileNotFoundError.
+    return pathlib.Path("/app/assets/results.json")
+
+
+def _run_leaderboard_seed_blocking() -> None:
+    """Synchronous leaderboard-seeder body — runs on a worker thread.
+
+    Reads `assets/results.json` and the boot-fitted forecaster, MERGEs
+    the rows into `dbo.Leaderboard`. Idempotent on re-run. Records
+    failure states so the readiness probe surfaces them without leaking
+    a traceback.
+    """
+    log = logging.getLogger("climasense_ml.leaderboard")
+    forecaster = _forecaster_tracker.forecaster
+    if forecaster is None or not forecaster.fitted:
+        _leaderboard_tracker.mark(
+            "failed",
+            detail="forecaster not fitted; cannot evaluate live row",
+        )
+        log.error(
+            "LeaderboardSeeder: forecaster not fitted; refusing to seed"
+        )
+        return
+
+    _leaderboard_tracker.mark("seeding", detail="merging notebook + live rows")
+    try:
+        results_path = _resolve_results_json()
+        engine = get_engine()
+        seeder = LeaderboardSeeder(
+            engine=engine,
+            results_json_path=results_path,
+            forecaster=forecaster,
+            history_loader=lambda: load_hourly_from_sql(engine),
+        )
+        result = seeder.run()
+        _leaderboard_tracker.mark(
+            "complete",
+            detail=(
+                f"merged {result.notebook_count} notebook + {result.live_count} "
+                f"live rows ({result.changed_count} changed)"
+            ),
+            result=result,
+        )
+    except FileNotFoundError as ex:
+        _leaderboard_tracker.mark("failed", detail=f"results.json missing: {ex}")
+        log.exception("LeaderboardSeeder: failed (results.json missing)")
+    except Exception as ex:  # noqa: BLE001 — record and surface
+        _leaderboard_tracker.mark("failed", detail=f"{type(ex).__name__}: {ex}")
+        log.exception("LeaderboardSeeder: failed (unexpected)")
 
 
 def _run_boot_fit_blocking() -> None:
@@ -559,7 +696,37 @@ async def _await_bootstrap_then_fit(app: FastAPI) -> None:
             "Forecast scheduler: not registered (forecaster state=%s)",
             _forecaster_tracker.state,
         )
+        # Leaderboard seeder also depends on a fitted forecaster; mark
+        # the seeder failed so the readiness probe surfaces "why".
+        _leaderboard_tracker.mark(
+            "failed",
+            detail=(
+                f"skipped because forecaster state is "
+                f"{_forecaster_tracker.state!r}"
+            ),
+        )
         return
+
+    # ----------------------------------------------------------------
+    # Leaderboard seed (slice 6). Runs after the boot-fit completes so
+    # the live row's MAE/RMSE come from the same fitted forecaster the
+    # scheduler will later use. Idempotent on re-run — a process
+    # restart re-runs the MERGE which produces zero net changes.
+    # ----------------------------------------------------------------
+    skip_seed = os.environ.get(
+        "CLIMASENSE_SKIP_LEADERBOARD_SEED", ""
+    ).lower() in ("1", "true", "yes")
+    if skip_seed:
+        log.info(
+            "LeaderboardSeeder: SKIPPED (CLIMASENSE_SKIP_LEADERBOARD_SEED)"
+        )
+        _leaderboard_tracker.mark(
+            "skipped",
+            detail="leaderboard seed skipped via env override",
+        )
+    else:
+        log.info("LeaderboardSeeder: scheduling seed (after boot-fit)")
+        await asyncio.to_thread(_run_leaderboard_seed_blocking)
 
     skip_scheduler = os.environ.get(
         "CLIMASENSE_SKIP_FORECAST_SCHEDULER", ""
@@ -626,7 +793,7 @@ def _register_forecast_scheduler(app: FastAPI) -> None:
 # ---------------------------------------------------------------------
 app = FastAPI(
     title="ClimaSense.ML",
-    version="0.5.0-slice-5",
+    version="0.6.0-slice-6",
     lifespan=lifespan,
 )
 app.add_middleware(CursorScopeMiddleware)
@@ -741,17 +908,25 @@ async def health_combined(
 
 
 async def _probe_ready() -> tuple[bool, dict[str, str]]:
-    """Compose the readiness checks: DB + bootstrap + forecaster.
+    """Compose the readiness checks: DB + bootstrap + forecaster + leaderboard.
 
     The pair `(ready, checks)` mirrors the slice-1 contract. `checks`
     keys are the per-dependency outcomes (`db`, `bootstrap`,
-    `forecaster`) so the body's `checks` map gives a reviewer running
-    curl an unambiguous "what's holding us back" answer.
+    `forecaster`, `leaderboard`) so the body's `checks` map gives a
+    reviewer running curl an unambiguous "what's holding us back"
+    answer.
+
+    Slice 6 adds the `leaderboard` check as **observability only** —
+    a failed seed is logged and surfaced in `checks` but does NOT
+    flip readiness to 503. The leaderboard is a UI concern; the wire
+    contract (forecast emission, range/heatmap reads) is unaffected
+    by a seed failure.
     """
 
     db_ok, checks = await _probe_db()
     bootstrap_ok = _probe_bootstrap(checks)
     forecaster_ok = _probe_forecaster(checks)
+    _probe_leaderboard(checks)  # observability only — return value ignored
     return (db_ok and bootstrap_ok and forecaster_ok), checks
 
 
@@ -788,6 +963,22 @@ def _probe_forecaster(checks: dict[str, str]) -> bool:
         return False
     checks["forecaster"] = "skipped"
     return False
+
+
+def _probe_leaderboard(checks: dict[str, str]) -> None:
+    """Project the leaderboard-seeder state into the `checks` map.
+
+    Observability-only — readiness does NOT depend on the seeder. The
+    contract: `complete` / `skipped` → `ok`; `failed` → `fail`;
+    `pending` / `seeding` → `skipped`.
+    """
+    state = _leaderboard_tracker.state
+    if state in ("complete", "skipped"):
+        checks["leaderboard"] = "ok"
+    elif state == "failed":
+        checks["leaderboard"] = "fail"
+    else:
+        checks["leaderboard"] = "skipped"
 
 
 async def _probe_db() -> tuple[bool, dict[str, str]]:

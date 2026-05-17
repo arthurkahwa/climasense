@@ -84,6 +84,12 @@ RUN uv venv /opt/venv \
 # Contract first — codegen reads from /app/contracts/openapi.yaml.
 COPY contracts ./contracts
 
+# Slice 6: `LeaderboardSeeder` reads `assets/results.json` at startup
+# to populate the notebook rows. We copy ONLY that one file (not the
+# 26 figure PNGs) to keep the image lean — the figures are README
+# fodder, not runtime inputs.
+COPY assets/results.json ./assets/results.json
+
 # Application source.
 COPY src/ClimaSense.ML/climasense_ml ./climasense_ml
 

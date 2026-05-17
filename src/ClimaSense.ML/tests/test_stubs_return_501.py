@@ -51,6 +51,10 @@ _REAL_ENDPOINTS = {
     ("/api/forecast", "post"),
     # Slice 5: /api/forecasts/latest is web-tier read-path bypass.
     ("/api/forecasts/latest", "get"),
+    # Slice 6: /api/leaderboard is web-tier read-path bypass. The ml
+    # tier populates `dbo.Leaderboard` via `LeaderboardSeeder` at
+    # startup; the read SELECT is served by the .NET tier directly.
+    ("/api/leaderboard", "get"),
 }
 
 

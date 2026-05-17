@@ -1,4 +1,4 @@
-# ClimaSense — cross-tier wire format (Slice 5 surface).
+# ClimaSense — cross-tier wire format (Slice 6 surface).
 #
 # This file is the source of truth for the .NET ↔ Python contract.
 # Slice 2 introduced the ML-tier request/response surface (forecast /
@@ -10,6 +10,12 @@
 # (lag-LR boot-fit + emission) and adds a web-tier `GET
 # /api/forecasts/latest` read that hits `dbo.fv_forecasts_at_cursor`
 # directly so the Explorer overlay never crosses to the ml container.
+# Slice 6 (#8) adds the leaderboard surface: the ml tier's
+# `LeaderboardSeeder` MERGEs the notebook rows from `assets/results.json`
+# at startup and one live row from the boot-fitted forecaster's eval on
+# the same 14-day held-out window; the web tier serves the rows via
+# `GET /api/leaderboard` (read-path bypass) and renders them on the
+# Razor `Analysis` page with the live row visually badged.
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
 # JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
@@ -19,7 +25,7 @@
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.5.0-slice-5
+  version: 0.6.0-slice-6
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
@@ -64,6 +70,13 @@ tags:
     description: Calendar-conditioned day-of-week × hour-of-day profiles.
   - name: comfort
     description: ASHRAE 55 graphical comfort zone scoring.
+  - name: leaderboard
+    description: |
+      Heterogeneous model leaderboard: notebook rows seeded from
+      `assets/results.json` plus one `provenance: live` row evaluated
+      at FastAPI startup by the boot-fitted `LagLinearForecaster` on
+      the same 14-day held-out window. Served by the web tier directly
+      from SQL — the read path bypasses the ml tier.
   - name: sse
     description: Server-Sent Events channel (web tier only).
 
@@ -537,6 +550,43 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
+
+  # -------------------------------------------------------------------
+  # Leaderboard — slice 6 read-path bypass. The web tier reads
+  # `dbo.Leaderboard` directly. The ml tier owns *populating* the table
+  # (via `LeaderboardSeeder` at FastAPI startup); the wire-shape lives
+  # here so the .NET service and the Razor `Analysis` page share one
+  # source of truth for column names.
+  # -------------------------------------------------------------------
+  /api/leaderboard:
+    get:
+      summary: Return all `dbo.Leaderboard` rows ordered by `mae` ascending.
+      description: |
+        Read-path bypass: the web tier executes
+        `SELECT ModelName, Mae, Rmse, Mape, Smape, Provenance, EvaluatedAt
+           FROM dbo.Leaderboard ORDER BY Mae ASC` and returns the rows
+        verbatim in camelCase. The ml container is NOT involved.
+
+        The table is populated at FastAPI startup by `LeaderboardSeeder`:
+        notebook rows from `assets/results.json` carry
+        `provenance: "notebook"`; one row produced by the boot-fitted
+        `LagLinearForecaster` on the same 14-day held-out window carries
+        `provenance: "live"`. Re-running the seeder produces zero net
+        changes (idempotent MERGE keyed on `ModelName`).
+
+        Empty `rows` is a valid 200 response (happens during the brief
+        window between FastAPI lifespan start and `LeaderboardSeeder`
+        completion). The ml-tier readiness gate prevents reviewers from
+        seeing this in practice.
+      operationId: getLeaderboard
+      tags: [leaderboard]
+      responses:
+        "200":
+          description: All leaderboard rows.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LeaderboardResponse"
 
   # -------------------------------------------------------------------
   # SSE — registered on the web tier; documented here so the contract
@@ -1017,3 +1067,78 @@ components:
           type: number
           format: double
           description: Mean of the trailing-window relative humidity in %.
+
+    # -----------------------------------------------------------------
+    # Leaderboard — slice 6. `provenance` distinguishes notebook rows
+    # (copied from `assets/results.json`) from the one boot-fitted live
+    # row (`LagLinearForecaster` evaluated on the same held-out window).
+    # -----------------------------------------------------------------
+    Provenance:
+      type: string
+      enum: [notebook, live]
+      description: |
+        Origin of a leaderboard row.
+          * `notebook` — copied from `assets/results.json`.
+          * `live`     — computed at FastAPI startup by the boot-fitted
+                         `LagLinearForecaster` on the same 14-day
+                         held-out window.
+
+    LeaderboardRow:
+      type: object
+      additionalProperties: false
+      required: [modelName, mae, rmse, provenance, evaluatedAt]
+      properties:
+        modelName:
+          type: string
+          description: |
+            Display name. Notebook rows preserve their printed labels
+            (e.g. `Naive (last value)`, `Holt-Winters (add, m=24)`,
+            `SARIMA(1,0,1)(1,0,1,24)`); the live row carries the
+            forecaster's `model_version` (e.g. `lag-lr-v1`).
+        mae:
+          type: number
+          format: double
+          minimum: 0
+          description: Mean absolute error on the 14-day held-out window.
+        rmse:
+          type: number
+          format: double
+          minimum: 0
+          description: Root mean squared error on the 14-day held-out window.
+        mape:
+          type: number
+          format: double
+          nullable: true
+          description: |
+            Mean absolute percentage error. `null` for rows whose
+            source did not report MAPE.
+        smape:
+          type: number
+          format: double
+          nullable: true
+          description: |
+            Symmetric mean absolute percentage error. `null` for rows
+            whose source did not report sMAPE.
+        provenance:
+          $ref: "#/components/schemas/Provenance"
+        evaluatedAt:
+          type: string
+          format: date-time
+          description: |
+            UTC timestamp at which the row was persisted. Notebook rows
+            carry the seeder run-time (re-MERGE refreshes it); the live
+            row carries the boot-fit completion time.
+
+    LeaderboardResponse:
+      type: object
+      additionalProperties: false
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          description: |
+            All rows in `dbo.Leaderboard`, ordered by `mae` ascending.
+            Empty during the brief lifespan window before
+            `LeaderboardSeeder` completes.
+          items:
+            $ref: "#/components/schemas/LeaderboardRow"

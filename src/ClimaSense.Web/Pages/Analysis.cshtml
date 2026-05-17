@@ -1,0 +1,334 @@
+@page "/Analysis"
+@model ClimaSense.Web.Pages.AnalysisModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ClimaSense — Model Leaderboard</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 2rem;
+            line-height: 1.5;
+        }
+        h1 {
+            color: #58a6ff;
+            font-weight: 500;
+            margin-top: 0;
+        }
+        h2 {
+            color: #c9d1d9;
+            font-weight: 500;
+            font-size: 1.15rem;
+            margin-top: 1.5rem;
+            margin-bottom: 0.5rem;
+        }
+        a { color: #58a6ff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        nav.crumbs {
+            color: #8b949e;
+            font-size: 0.9rem;
+            margin-bottom: 0.5rem;
+        }
+        section.panel {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+        }
+        code {
+            background: #0d1117;
+            border-radius: 4px;
+            padding: 0.1rem 0.35rem;
+            color: #d2a8ff;
+            font-size: 0.9em;
+        }
+        ul.legend {
+            color: #8b949e;
+            font-size: 0.9rem;
+            margin-top: 0.25rem;
+        }
+        /* ---- leaderboard table ---- */
+        table.leaderboard {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 0.75rem;
+            font-variant-numeric: tabular-nums;
+        }
+        table.leaderboard th,
+        table.leaderboard td {
+            text-align: left;
+            padding: 0.55rem 0.75rem;
+            border-bottom: 1px solid #21262d;
+        }
+        table.leaderboard th {
+            color: #8b949e;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            font-weight: 500;
+            border-bottom: 2px solid #30363d;
+            background: #0d1117;
+        }
+        table.leaderboard td.numeric {
+            text-align: right;
+            font-family: ui-monospace, "SF Mono", Consolas, monospace;
+            color: #d2a8ff;
+        }
+        table.leaderboard td.dim {
+            color: #6e7681;
+        }
+        table.leaderboard tr.live-row {
+            background: linear-gradient(90deg,
+                rgba(63, 185, 80, 0.16),
+                rgba(63, 185, 80, 0.06));
+        }
+        table.leaderboard tr.live-row td {
+            border-bottom-color: rgba(63, 185, 80, 0.4);
+        }
+        table.leaderboard tr.live-row td:first-child {
+            border-left: 3px solid #56d364;
+            padding-left: calc(0.75rem - 3px);
+        }
+        table.leaderboard tr.live-row td.numeric {
+            color: #56d364;
+        }
+        .badge {
+            display: inline-block;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            line-height: 1;
+            margin-left: 0.5rem;
+            vertical-align: middle;
+        }
+        .badge.live {
+            background: #56d364;
+            color: #0d1117;
+        }
+        .badge.notebook {
+            background: #30363d;
+            color: #8b949e;
+        }
+        .empty-state {
+            color: #8b949e;
+            padding: 2rem;
+            text-align: center;
+            font-style: italic;
+        }
+        .error-state {
+            color: #f85149;
+            padding: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <nav class="crumbs">
+        <a href="/">Dashboard</a> ·
+        <a href="/Explorer">Historical Explorer</a> ·
+        <strong>Model Leaderboard</strong>
+    </nav>
+
+    <h1>Model Leaderboard</h1>
+
+    <p>
+        Side-by-side comparison of the notebook's offline models against
+        the boot-fitted lag-LR forecaster running live in this stack.
+        All rows evaluated on the same 14-day held-out window — the
+        comparison is apples-to-apples by construction
+        (see ADR-0001 / CONTEXT.md &rarr; <code>Provenance</code>).
+    </p>
+
+    <section class="panel">
+        <h2>Leaderboard <span id="row-count" style="color:#8b949e;font-weight:400;font-size:0.9rem;"></span></h2>
+        <div id="leaderboard-host">
+            <div class="empty-state" id="empty-state">Loading leaderboard&hellip;</div>
+        </div>
+    </section>
+
+    <section class="panel">
+        <strong>What the rows mean</strong>
+        <ul class="legend">
+            <li>
+                <span class="badge notebook">notebook</span>
+                rows copied verbatim from
+                <code>assets/results.json</code>
+                (committed at notebook execution time).
+            </li>
+            <li>
+                <span class="badge live">live</span>
+                row computed at FastAPI startup by the boot-fitted
+                <code>LagLinearForecaster</code>, evaluated on the same
+                14-day held-out window. Re-runs of the seeder produce
+                zero net changes — the table's
+                <code>UNIQUE (ModelName)</code> constraint plus an SQL
+                <code>MERGE</code> make idempotency a property of the
+                schema, not of caller discipline.
+            </li>
+        </ul>
+    </section>
+
+    <script>
+        // ----------------------------------------------------------------
+        // Slice 6: leaderboard table rendering.
+        //
+        // Pure XHR/fetch — no framework. textContent only for any cell
+        // that might contain reviewer-supplied text (the model names
+        // come from results.json + the forecaster, both server-trusted
+        // today, but the textContent discipline keeps the page safe
+        // against a future un-trusted source).
+        // ----------------------------------------------------------------
+        (function () {
+            var host = document.getElementById('leaderboard-host');
+            var emptyState = document.getElementById('empty-state');
+            var rowCountEl = document.getElementById('row-count');
+
+            function formatMetric(value, digits) {
+                if (value === null || value === undefined) return '—';
+                if (typeof value !== 'number' || !isFinite(value)) return '—';
+                return value.toFixed(digits);
+            }
+
+            function formatTimestamp(iso) {
+                try {
+                    var d = new Date(iso);
+                    return d.toLocaleString(undefined, {
+                        year: 'numeric', month: 'short', day: '2-digit',
+                        hour: '2-digit', minute: '2-digit',
+                        timeZoneName: 'short',
+                    });
+                } catch (e) {
+                    return iso || '';
+                }
+            }
+
+            function renderError(message) {
+                host.replaceChildren();
+                var div = document.createElement('div');
+                div.className = 'error-state';
+                div.textContent =
+                    '/api/leaderboard failed: ' + (message || 'unknown error');
+                host.appendChild(div);
+            }
+
+            function renderEmpty() {
+                host.replaceChildren();
+                var div = document.createElement('div');
+                div.className = 'empty-state';
+                div.textContent =
+                    'No leaderboard rows yet. The ml-tier ' +
+                    'LeaderboardSeeder runs on startup; check ' +
+                    '/api/health/ready and reload.';
+                host.appendChild(div);
+            }
+
+            function makeCell(text, classes) {
+                var td = document.createElement('td');
+                td.textContent = text;
+                if (classes) td.className = classes;
+                return td;
+            }
+
+            function makeNameCell(row) {
+                var td = document.createElement('td');
+                td.textContent = row.modelName;
+                if (row.provenance === 'live') {
+                    var badge = document.createElement('span');
+                    badge.className = 'badge live';
+                    badge.textContent = 'LIVE';
+                    td.appendChild(badge);
+                }
+                return td;
+            }
+
+            function renderRows(rows) {
+                host.replaceChildren();
+                if (!rows || rows.length === 0) {
+                    renderEmpty();
+                    return;
+                }
+
+                var table = document.createElement('table');
+                table.className = 'leaderboard';
+
+                var thead = document.createElement('thead');
+                var headerRow = document.createElement('tr');
+                ['Model', 'MAE', 'RMSE', 'MAPE', 'sMAPE',
+                 'Provenance', 'Evaluated'].forEach(function (label) {
+                    var th = document.createElement('th');
+                    th.textContent = label;
+                    headerRow.appendChild(th);
+                });
+                thead.appendChild(headerRow);
+                table.appendChild(thead);
+
+                var tbody = document.createElement('tbody');
+                rows.forEach(function (row) {
+                    var tr = document.createElement('tr');
+                    if (row.provenance === 'live') {
+                        tr.className = 'live-row';
+                        tr.setAttribute('data-provenance', 'live');
+                    } else {
+                        tr.setAttribute('data-provenance', 'notebook');
+                    }
+                    tr.appendChild(makeNameCell(row));
+                    tr.appendChild(makeCell(formatMetric(row.mae, 4), 'numeric'));
+                    tr.appendChild(makeCell(formatMetric(row.rmse, 4), 'numeric'));
+                    tr.appendChild(makeCell(formatMetric(row.mape, 3),
+                        row.mape === null || row.mape === undefined
+                            ? 'numeric dim' : 'numeric'));
+                    tr.appendChild(makeCell(formatMetric(row.smape, 3),
+                        row.smape === null || row.smape === undefined
+                            ? 'numeric dim' : 'numeric'));
+                    tr.appendChild(makeCell(row.provenance || '—'));
+                    tr.appendChild(makeCell(formatTimestamp(row.evaluatedAt), 'dim'));
+                    tbody.appendChild(tr);
+                });
+                table.appendChild(tbody);
+                host.appendChild(table);
+
+                rowCountEl.textContent = '(' + rows.length + ' rows)';
+            }
+
+            fetch('/api/leaderboard',
+                  { headers: { 'Accept': 'application/json' } })
+                .then(function (resp) {
+                    if (!resp.ok) {
+                        return resp.json().then(function (body) {
+                            throw {
+                                status: resp.status,
+                                error: body && body.error,
+                                message: body && body.message
+                            };
+                        }, function () {
+                            throw {
+                                status: resp.status,
+                                error: 'http_error',
+                                message: 'HTTP ' + resp.status
+                            };
+                        });
+                    }
+                    return resp.json();
+                })
+                .then(function (body) {
+                    renderRows(body && body.rows);
+                })
+                .catch(function (err) {
+                    renderError(err && err.message
+                        ? err.message : 'unknown error');
+                });
+        })();
+    </script>
+</body>
+</html>

@@ -113,6 +113,13 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         "BucketedReadingsResponse",
         "HeatmapCell",
         "HeatmapResponse",
+        # Slice 6: only referenced by /api/leaderboard (web-tier only).
+        # The ml tier *populates* dbo.Leaderboard via LeaderboardSeeder
+        # at startup, but the read endpoint lives on the .NET tier so
+        # the Razor `Analysis` page never crosses to the ml container.
+        "Provenance",
+        "LeaderboardRow",
+        "LeaderboardResponse",
     }
     # Paths declared in the contract for cross-tier audit purposes but
     # NOT served by the FastAPI ml tier (they live on the .NET web tier).
@@ -134,6 +141,12 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # so the Explorer chart can overlay forecasts without a Python
         # hop.
         "/api/forecasts/latest",
+        # Slice 6: /api/leaderboard is a .NET-tier SELECT from
+        # `dbo.Leaderboard`. The ml tier *populates* that table via
+        # `LeaderboardSeeder` at FastAPI startup; the read path
+        # bypasses the ml container so the Analysis page survives an
+        # ml outage.
+        "/api/leaderboard",
     }
 
     def _strip(node: Any) -> Any:

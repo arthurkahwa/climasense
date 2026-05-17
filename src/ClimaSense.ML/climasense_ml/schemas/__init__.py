@@ -19,8 +19,11 @@ from .generated import (  # noqa: F401  (re-export surface for handlers)
     ForecastRequest,
     HealthStatus,
     LatestReading,
+    LeaderboardResponse,
+    LeaderboardRow,
     ProblemDetails,
     ProfilesAnalyzeRequest,
     ProfilesAnalyzeResponse,
+    Provenance,
     Status as HealthStatusEnum,
 )
