@@ -103,15 +103,21 @@
     </style>
 </head>
 <body>
-    <h1>ClimaSense — slice 3 dashboard</h1>
+    <h1>ClimaSense — dashboard</h1>
+
+    <nav style="color:#8b949e;font-size:0.9rem;margin-bottom:0.5rem;">
+        Dashboard ·
+        <a href="/Explorer" style="color:#58a6ff;">Historical Explorer</a>
+    </nav>
 
     <p>
-        Slice 3 adds the first live read: the latest
-        <code>SensorReadings</code> row served by the .NET tier
-        directly from SQL (no ml-tier hop). The
+        Live read: the latest <code>SensorReadings</code> row served by
+        the .NET tier directly from SQL (no ml-tier hop). The
         heartbeat counter below remains as the SSE plumbing smoke test
         from slice 1; later slices replace this whole page with the
-        proper dashboard.
+        proper dashboard. Slice 4 adds the
+        <a href="/Explorer" style="color:#58a6ff;">Historical Explorer</a>
+        for range + heatmap exploration.
     </p>
 
     <!-- ============================================== -->

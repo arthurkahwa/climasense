@@ -1,10 +1,14 @@
-# ClimaSense — cross-tier wire format (Slice 3 surface).
+# ClimaSense — cross-tier wire format (Slice 4 surface).
 #
 # This file is the source of truth for the .NET ↔ Python contract.
 # Slice 2 introduced the ML-tier request/response surface (forecast /
-# anomalies / profiles / comfort) as 501-stubs; slice 3 adds the first
-# read-path endpoint on the .NET tier — `GET /api/readings/latest` —
-# served directly from SQL Server without a hop through ml.
+# anomalies / profiles / comfort) as 501-stubs; slice 3 added the
+# first read-path endpoint on the .NET tier — `GET /api/readings/latest`.
+# Slice 4 (#6) extends that read-path with two aggregating endpoints —
+# `GET /api/readings/range` and `GET /api/readings/heatmap` — that
+# power the historical Explorer page (range + GitHub-style calendar
+# heatmap). Both are served directly from SQL via `DATE_BUCKET` and
+# cursor-clipped with `WHERE ReadingTime <= @asOf`.
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
 # JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
@@ -14,7 +18,7 @@
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.3.0-slice-3
+  version: 0.4.0-slice-4
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
@@ -368,7 +372,7 @@ paths:
   # -------------------------------------------------------------------
   # Readings — raw `SensorReadings` reads. Web tier only (read-path
   # bypasses ml). Slice 3 ships /latest; slice 4 (#6) adds /range and
-  # /heatmap.
+  # /heatmap (this file).
   # -------------------------------------------------------------------
   /api/readings/latest:
     get:
@@ -396,6 +400,111 @@ paths:
                 $ref: "#/components/schemas/LatestReading"
         "404":
           description: SensorReadings is empty (bootstrap incomplete).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  /api/readings/range:
+    get:
+      summary: Return time-bucketed (or raw) `SensorReadings` over `[start, end]`.
+      description: |
+        Bucket aggregation over `[start, end]` using SQL Server's
+        `DATE_BUCKET` function. Cursor-clipped with
+        `WHERE ReadingTime <= @asOf` so under `ReplayClock` (slice 12)
+        the result reflects only what would have been visible at the
+        cursor's position.
+
+        `bucket` selects the aggregation granularity:
+
+          * `raw`    — one row per `SensorReadings` row (no aggregation).
+                       The web tier caps the *time span* a `raw` request
+                       may cover (default: 7 days) to keep response
+                       payloads bounded. Larger spans return 400 with
+                       `range_too_large` and a suggested smaller bucket.
+          * `hour`   — `DATE_BUCKET(HOUR, 1, ReadingTime)`.
+          * `day`    — `DATE_BUCKET(DAY,  1, ReadingTime)`.
+          * `week`   — `DATE_BUCKET(WEEK, 1, ReadingTime)`.
+
+        For aggregated buckets, empty buckets are included with
+        `sampleCount: 0` and `null` metric fields so the dashboard can
+        render gaps.
+
+        Returns 400 on `start > end`, an unknown `bucket` literal, or a
+        `raw` request spanning more than `CLIMASENSE_RAW_MAX_DAYS`
+        (default 7) days.
+      operationId: getReadingsRange
+      tags: [readings]
+      parameters:
+        - in: query
+          name: start
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive lower bound (UTC ISO 8601).
+        - in: query
+          name: end
+          required: true
+          schema:
+            type: string
+            format: date-time
+          description: Inclusive upper bound (UTC ISO 8601). Clipped at cursor.
+        - in: query
+          name: bucket
+          required: false
+          schema:
+            $ref: "#/components/schemas/RangeBucket"
+          description: Aggregation granularity. Default `hour`.
+      responses:
+        "200":
+          description: Bucketed (or raw) readings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BucketedReadingsResponse"
+        "400":
+          description: Invalid range, bucket, or `raw` span too large.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  /api/readings/heatmap:
+    get:
+      summary: Return per-day mean temperature for a calendar year.
+      description: |
+        Returns one cell per calendar day for the requested `year` — up
+        to 366 rows. Aggregation uses `DATE_BUCKET(DAY, 1, ReadingTime)`.
+        Days with zero samples are included with `sampleCount: 0` and
+        `temperatureMean: null` so the dashboard can render a uniform
+        GitHub-contribution-style grid.
+
+        Cursor-clipped: under `ReplayClock` (slice 12) only readings
+        with `ReadingTime <= cursor` count toward the means.
+
+        `year` is constrained to 1900..2100 to keep the result-set size
+        bounded and the input sanitised.
+      operationId: getReadingsHeatmap
+      tags: [readings]
+      parameters:
+        - in: query
+          name: year
+          required: true
+          schema:
+            type: integer
+            minimum: 1900
+            maximum: 2100
+          description: Calendar year (UTC).
+      responses:
+        "200":
+          description: Daily-mean cells for the requested year.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HeatmapResponse"
+        "400":
+          description: Invalid year.
           content:
             application/json:
               schema:
@@ -493,6 +602,129 @@ components:
           minimum: 0
           maximum: 100
           example: 47.0
+
+    # -----------------------------------------------------------------
+    # Range bucketing — slice 4. Controls `GET /api/readings/range`'s
+    # aggregation granularity (mapped onto SQL Server's `DATE_BUCKET`
+    # boundaries on the server side).
+    # -----------------------------------------------------------------
+    RangeBucket:
+      type: string
+      enum: [raw, hour, day, week]
+      description: |
+        Aggregation granularity for `/api/readings/range`.
+          * `raw`  — un-aggregated rows (capped by `CLIMASENSE_RAW_MAX_DAYS`).
+          * `hour` — `DATE_BUCKET(HOUR, 1, ReadingTime)`.
+          * `day`  — `DATE_BUCKET(DAY, 1, ReadingTime)`.
+          * `week` — `DATE_BUCKET(WEEK, 1, ReadingTime)`.
+
+    BucketedReading:
+      type: object
+      additionalProperties: false
+      required: [bucketTime, sampleCount]
+      properties:
+        bucketTime:
+          type: string
+          format: date-time
+          description: |
+            Bucket start (UTC). For `raw`, this is the row's `ReadingTime`;
+            for aggregated buckets, the `DATE_BUCKET` boundary.
+        sampleCount:
+          type: integer
+          minimum: 0
+          description: |
+            Count of `SensorReadings` rows that fell into the bucket.
+            `0` for empty aggregated buckets (metric fields are then `null`).
+        temperatureMean:
+          type: number
+          format: double
+          nullable: true
+          description: |
+            Mean temperature (°C) over the bucket. `null` when
+            `sampleCount` is 0. For `raw`, equals the row's temperature.
+        temperatureMin:
+          type: number
+          format: double
+          nullable: true
+          description: Min temperature (°C). `null` when `sampleCount` is 0.
+        temperatureMax:
+          type: number
+          format: double
+          nullable: true
+          description: Max temperature (°C). `null` when `sampleCount` is 0.
+        humidityMean:
+          type: number
+          format: double
+          nullable: true
+          description: Mean humidity (% RH). `null` when `sampleCount` is 0.
+        humidityMin:
+          type: number
+          format: double
+          nullable: true
+          description: Min humidity. `null` when `sampleCount` is 0.
+        humidityMax:
+          type: number
+          format: double
+          nullable: true
+          description: Max humidity. `null` when `sampleCount` is 0.
+
+    BucketedReadingsResponse:
+      type: object
+      additionalProperties: false
+      required: [start, end, bucket, buckets]
+      properties:
+        start:
+          type: string
+          format: date-time
+          description: Echo of the requested window start (clipped at cursor).
+        end:
+          type: string
+          format: date-time
+          description: Echo of the requested window end (clipped at cursor).
+        bucket:
+          $ref: "#/components/schemas/RangeBucket"
+        buckets:
+          type: array
+          items:
+            $ref: "#/components/schemas/BucketedReading"
+
+    HeatmapCell:
+      type: object
+      additionalProperties: false
+      required: [date, sampleCount]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Calendar day (UTC, ISO 8601 `YYYY-MM-DD`).
+        sampleCount:
+          type: integer
+          minimum: 0
+          description: Count of readings on this day (0 if no data).
+        temperatureMean:
+          type: number
+          format: double
+          nullable: true
+          description: |
+            Daily mean temperature (°C). `null` when `sampleCount` is 0.
+
+    HeatmapResponse:
+      type: object
+      additionalProperties: false
+      required: [year, cells]
+      properties:
+        year:
+          type: integer
+          minimum: 1900
+          maximum: 2100
+          description: Echo of the requested year.
+        cells:
+          type: array
+          description: |
+            One cell per calendar day in `year`. Length is 365 or 366
+            depending on leap-year status.
+          items:
+            $ref: "#/components/schemas/HeatmapCell"
 
     # -----------------------------------------------------------------
     # ProblemDetails — RFC 7807-shaped error body used uniformly across
