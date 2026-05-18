@@ -1,10 +1,11 @@
 """501-Not-Implemented stub handlers for the remaining contract surface.
 
 Slice 2 stubbed every contract endpoint. Slice 5 lands the real
-`/api/forecast` GET + POST handlers (see `forecast_router.py`) so they
-are removed from this module. The remaining stubs (anomalies, profiles,
-comfort) continue to return 501 until their implementing slices land
-(#9 / #10 / #8 respectively).
+`/api/forecast` GET + POST handlers (see `forecast_router.py`). Slice 7
+(#9) lands the real `/api/comfort/score` handler (see
+`comfort_router.py`). The remaining stubs (anomalies, profiles)
+continue to return 501 until their implementing slices land (#10 /
+#11 respectively).
 
 Why dedicated stubs (rather than a wildcard catch-all):
 
@@ -25,13 +26,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Query, Request, status
+from fastapi import APIRouter, Body, Request, status
 from fastapi.responses import JSONResponse
 
 from .schemas import (
     AnomalyDetectRequest,
     AnomalyDetectResponse,
-    ComfortScoreResponse,
     ProblemDetails,
     ProfilesAnalyzeRequest,
     ProfilesAnalyzeResponse,
@@ -118,29 +118,7 @@ async def post_profiles_analyze(
     )
 
 
-# -------------------------------------------------------------------
-# Comfort
-# -------------------------------------------------------------------
-@router.get(
-    "/api/comfort/score",
-    operation_id="getComfortScore",
-    tags=["comfort"],
-    responses={
-        200: {"model": ComfortScoreResponse},
-        501: {"model": ProblemDetails},
-        502: {"model": ProblemDetails},
-        503: {"model": ProblemDetails},
-        504: {"model": ProblemDetails},
-    },
-)
-async def get_comfort_score(
-    request: Request,
-    hours: Annotated[int, Query(ge=1, le=168)] = 24,
-) -> JSONResponse:
-    """Stubbed in slice 2; ASHRAE 55 polygon scoring lands in slice 8."""
-    del hours
-    return _not_implemented(
-        request,
-        "not_implemented",
-        "GET /api/comfort/score lands in slice 8 (ASHRAE 55 graphical zone).",
-    )
+# NOTE: GET /api/comfort/score was a slice-2 stub; slice 7 promotes
+# it to a real handler in `comfort_router.py`. The route is registered
+# on the FastAPI app before this stub router, so this module is now
+# silent on comfort.

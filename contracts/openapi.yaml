@@ -1,4 +1,4 @@
-# ClimaSense — cross-tier wire format (Slice 6 surface).
+# ClimaSense — cross-tier wire format (Slice 7 surface).
 #
 # This file is the source of truth for the .NET ↔ Python contract.
 # Slice 2 introduced the ML-tier request/response surface (forecast /
@@ -16,6 +16,14 @@
 # the same 14-day held-out window; the web tier serves the rows via
 # `GET /api/leaderboard` (read-path bypass) and renders them on the
 # Razor `Analysis` page with the live row visually badged.
+# Slice 7 (#9) promotes `/api/comfort/score` from 501-stub to a real
+# ml-tier handler: a pure `ComfortCalculator` (ASHRAE 55-2020 graphical
+# zone polygons) scores the trailing-window mean (T, RH) and MERGEs a
+# row into `dbo.ComfortScores` (idempotent on `BucketTime`). An
+# APScheduler β-prime gate (slice-5 pattern) emits one row per
+# replay-hour. The dashboard's comfort card reads through a new
+# web-tier-only `/api/comfort/current` (the `dbo.fv_comfortscores_at_cursor`
+# TVF — read-path bypass).
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
 # JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
@@ -25,7 +33,7 @@
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.6.0-slice-6
+  version: 0.7.0-slice-7
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
@@ -356,7 +364,7 @@ paths:
                 $ref: "#/components/schemas/ProblemDetails"
 
   # -------------------------------------------------------------------
-  # Comfort — ASHRAE 55 graphical zone scoring; slice 8 implements.
+  # Comfort — ASHRAE 55 graphical zone scoring (slice 7).
   # -------------------------------------------------------------------
   /api/comfort/score:
     get:
@@ -365,7 +373,12 @@ paths:
         Scores the average of the last `hours` of `SensorReadings`
         (clipped at cursor) against ASHRAE 55 summer/winter polygons
         selected by calendar month and `COMFORT_HEMISPHERE` env var.
-        Pure function — no DB writes.
+
+        Side-effect: also `MERGE`s the resulting `(BucketTime, Score,
+        Rating, Season)` into `dbo.ComfortScores`. Idempotent per
+        `UNIQUE(BucketTime)` — re-running at the same cursor
+        position produces zero net change because the calculator is
+        pure.
       operationId: getComfortScore
       tags: [comfort]
       parameters:
@@ -385,26 +398,44 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ComfortScoreResponse"
-        "501":
-          description: Stubbed in slice 2; implemented in slice 8.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetails"
-        "502":
-          description: ml tier returned 5xx.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetails"
         "503":
-          description: ml tier unreachable.
+          description: |
+            The trailing window had no `SensorReadings` rows to score
+            (`error: empty_window`). Typically only seen during the
+            brief bootstrap window before `SensorReadings` is populated.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-        "504":
-          description: ml tier exceeded the bounded timeout.
+
+  # -------------------------------------------------------------------
+  # Comfort current — slice 7. Web-tier read-path bypass for the
+  # dashboard card. Reads the most recent `ComfortScores` row through
+  # `dbo.fv_comfortscores_at_cursor(@asOf)` (init-db.sql §3.4). The
+  # ml container is NOT involved.
+  # -------------------------------------------------------------------
+  /api/comfort/current:
+    get:
+      summary: Return the most recent comfort score visible at the cursor.
+      description: |
+        Returns the `ComfortScores` row with the largest `BucketTime`
+        that is less-than-or-equal-to the current cursor. Reads SQL
+        Server directly via the inline TVF
+        `dbo.fv_comfortscores_at_cursor(@asOf)` — the ml container is
+        NOT involved. Returns 404 when no comfort rows exist at or
+        before the cursor (e.g. before the first scheduled emission
+        lands).
+      operationId: getComfortCurrent
+      tags: [comfort]
+      responses:
+        "200":
+          description: Latest comfort row at the cursor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CurrentComfortResponse"
+        "404":
+          description: No comfort rows visible at the cursor yet.
           content:
             application/json:
               schema:
@@ -1067,6 +1098,38 @@ components:
           type: number
           format: double
           description: Mean of the trailing-window relative humidity in %.
+
+    # -----------------------------------------------------------------
+    # CurrentComfortResponse — slice 7 web-tier read shape. Returned by
+    # `GET /api/comfort/current` (the dashboard's comfort card). Reads
+    # the most recent `dbo.ComfortScores` row at the cursor; does NOT
+    # carry the `averageTemperature` / `averageHumidity` fields since
+    # those are only available on the emission path (the on-demand
+    # `GET /api/comfort/score`) where the means are computed.
+    # -----------------------------------------------------------------
+    CurrentComfortResponse:
+      type: object
+      additionalProperties: false
+      required: [score, rating, season, bucketTime, computedAt]
+      properties:
+        score:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Most recent comfort score (0–100).
+        rating:
+          $ref: "#/components/schemas/ComfortRating"
+        season:
+          $ref: "#/components/schemas/ComfortSeason"
+        bucketTime:
+          type: string
+          format: date-time
+          description: The `BucketTime` the row was scored for (UTC).
+        computedAt:
+          type: string
+          format: date-time
+          description: When the row was written into `ComfortScores` (UTC).
 
     # -----------------------------------------------------------------
     # Leaderboard — slice 6. `provenance` distinguishes notebook rows

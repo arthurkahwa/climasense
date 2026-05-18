@@ -120,6 +120,12 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         "Provenance",
         "LeaderboardRow",
         "LeaderboardResponse",
+        # Slice 7: only referenced by /api/comfort/current (web-tier
+        # only). The ml tier *populates* dbo.ComfortScores via the
+        # ComfortEmitter scheduler + the on-demand GET, but the
+        # dashboard's comfort card reads through the .NET tier
+        # directly.
+        "CurrentComfortResponse",
     }
     # Paths declared in the contract for cross-tier audit purposes but
     # NOT served by the FastAPI ml tier (they live on the .NET web tier).
@@ -147,6 +153,11 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # bypasses the ml container so the Analysis page survives an
         # ml outage.
         "/api/leaderboard",
+        # Slice 7: /api/comfort/current is a .NET-tier read of the
+        # `dbo.fv_comfortscores_at_cursor` TVF — bypasses the ml
+        # tier. The dashboard's comfort card needs this read-path
+        # bypass to survive an ml outage.
+        "/api/comfort/current",
     }
 
     def _strip(node: Any) -> Any:

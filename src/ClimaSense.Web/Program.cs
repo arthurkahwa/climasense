@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using ClimaSense.Web.Clock;
+using ClimaSense.Web.Comfort;
 using ClimaSense.Web.Cursor;
 using ClimaSense.Web.Forecasts;
 using ClimaSense.Web.Leaderboard;
@@ -143,6 +144,21 @@ builder.Services.AddScoped<LeaderboardReadService>(sp =>
 {
     var fetcher = sp.GetRequiredService<SqlLeaderboardFetcher>();
     return new LeaderboardReadService(fetcher.FetchAsync);
+});
+
+// ---------------------------------------------------------------------
+// Comfort — slice 7. `ComfortReadService` follows the slice-5/6 delegate
+// pattern. The read goes through `dbo.fv_comfortscores_at_cursor(@asOf)`
+// so cursor-clipping is enforced by the schema. `dbo.ComfortScores` is
+// populated by the ml-tier's APScheduler-driven `ComfortEmitter`
+// (β-prime gate, one row per replay-hour) plus the on-demand
+// `GET /api/comfort/score` endpoint.
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<SqlComfortFetcher>();
+builder.Services.AddScoped<ComfortReadService>(sp =>
+{
+    var fetcher = sp.GetRequiredService<SqlComfortFetcher>();
+    return new ComfortReadService(fetcher.FetchAsync);
 });
 
 // ---------------------------------------------------------------------
@@ -312,6 +328,41 @@ app.MapGet("/api/leaderboard", async (
     var response = await leaderboard.GetAllAsync(cancellationToken)
         .ConfigureAwait(false);
     return Results.Json(response, statusCode: StatusCodes.Status200OK);
+});
+
+// ---------------------------------------------------------------------
+// Comfort — slice 7. Read-path bypass: the web tier reads the most
+// recent `dbo.ComfortScores` row through the
+// `dbo.fv_comfortscores_at_cursor(@asOf)` TVF directly. The ml
+// container is NOT involved. The table is populated by the ml-tier
+// comfort scheduler (β-prime, one row per replay-hour) plus the
+// on-demand `GET /api/comfort/score`. Returns 404 with a
+// ProblemDetails-shaped body when no comfort row exists at or before
+// the cursor.
+// ---------------------------------------------------------------------
+app.MapGet("/api/comfort/current", async (
+    HttpContext ctx,
+    ComfortReadService comfort,
+    CursorSnapshot cursor,
+    CancellationToken cancellationToken) =>
+{
+    var current = await comfort.GetCurrentAsync(cursor, cancellationToken)
+        .ConfigureAwait(false);
+    if (current is null)
+    {
+        return Results.Json(
+            new
+            {
+                error = "no_comfort_yet",
+                message =
+                    "ComfortScores is empty at the cursor (the scheduler " +
+                    "may not have emitted its first row yet). The on-demand " +
+                    "GET /api/comfort/score endpoint also writes a row.",
+                requestId = RequestIdMiddleware.Get(ctx),
+            },
+            statusCode: StatusCodes.Status404NotFound);
+    }
+    return Results.Json(current, statusCode: StatusCodes.Status200OK);
 });
 
 // Liveness — process up.
