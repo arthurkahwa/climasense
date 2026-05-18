@@ -355,26 +355,33 @@ GO
 --
 --    Encoded as a SQL inline TVF so the recompute job can `INSERT INTO
 --    DayProfiles SELECT ... FROM dbo.fn_classify_pattern(MeanResidual,
---    MaxAbsZscore)` once profile rows are computed (slice 10).
+--    MaxAbsZscore)`.
 --
---    Provenance — these constants are derivable from the notebook's
---    EDA distributions but the notebook does not compute the percentiles
---    explicitly. The pinned defaults below are PRD-agreed and traced
---    in CONTEXT.md → "Notebook as calibration upstream":
+--    Provenance — EMPIRICAL (slice 9). These three constants are
+--    produced by `scripts/derive_pattern_thresholds.py` running against
+--    the full `sensor_data.csv` (after the same hourly-resample +
+--    linear-interpolation pipeline the forecaster uses). The script is
+--    deterministic; rerunning it yields identical numbers. The
+--    derivation methodology (and the receipts) live in
+--    `SLICE-9-NOTES.md` plus the script's own module docstring.
 --
---      * `volatile` — MaxAbsZscore > 1.281552  (~ p90 of standard normal,
---        from notebook EDA section §5: temperature σ ≈ 1.6 °C, signal is
---        weakly cyclostationary, so a daily MaxAbsZscore above the
---        normal-tail p90 is the agreed "volatile" cut-off until empirical
---        per-cohort percentiles land in slice 10).
---      * `warm` / `cool` — MeanResidual outside ±0.6745 (~ p25/p75 of
---        standard normal, from notebook EDA §5 daily-mean dispersion).
---      * `quiet` otherwise.
+--    Training window: 2016-01-20 -> 2026-05-07
+--    Hourly rows in scope: 90,239
+--    Daily profiles aggregated: 3,754
+--
+--      * `volatile` — MaxAbsZscore > 3.059456  (p90 of MaxAbsZscore over
+--        the per-day population)
+--      * `warm`     — MeanResidual >  0.027845 (p75 of MeanResidual)
+--      * `cool`     — MeanResidual < -0.024658 (p25 of MeanResidual)
+--      * `quiet`    — otherwise
 --
 --    Precedence: volatile > warm > cool > quiet.
---    See PR "Judgment calls" — these constants are PROVISIONAL: slice 10
---    will replace them with empirical per-cohort percentiles computed
---    against accumulated `DayProfiles` rows once enough days exist.
+--
+--    Slice 1 shipped standard-normal placeholders (1.281552, ±0.6745)
+--    with a TODO(slice-9) marker; this slice replaces them with the
+--    empirical numbers above. To re-derive after the data accumulates:
+--        python3 scripts/derive_pattern_thresholds.py
+--    and paste the resulting CASE expression below.
 -- ---------------------------------------------------------------------
 
 IF OBJECT_ID(N'dbo.fn_classify_pattern', N'IF') IS NOT NULL
@@ -393,12 +400,15 @@ RETURN
         CAST(
             CASE
                 -- volatile wins when the day's worst |z| exceeds p90.
-                -- 1.281552 ≈ Φ⁻¹(0.90); see Pattern threshold note above.
-                WHEN @maxAbsZscore > 1.281552 THEN N'volatile'
+                -- 3.059456 = p90(MaxAbsZscore) across the full
+                -- training-window population (slice-9 derivation).
+                WHEN @maxAbsZscore > 3.059456 THEN N'volatile'
                 -- warm / cool driven by the day's mean residual against
-                -- its calendar cohort. ±0.6745 ≈ Φ⁻¹(0.75) = -Φ⁻¹(0.25).
-                WHEN @meanResidual >  0.6745 THEN N'warm'
-                WHEN @meanResidual < -0.6745 THEN N'cool'
+                -- its calendar cohort.
+                -- p75(MeanResidual) =  0.027845, p25(MeanResidual) = -0.024658
+                -- (slice-9 derivation).
+                WHEN @meanResidual >  0.027845 THEN N'warm'
+                WHEN @meanResidual < -0.024658 THEN N'cool'
                 ELSE N'quiet'
             END
             AS VARCHAR(16)

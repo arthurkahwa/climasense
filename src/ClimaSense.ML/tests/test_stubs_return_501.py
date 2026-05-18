@@ -25,6 +25,8 @@ os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_SCHEDULER", "1")
 os.environ.setdefault("CLIMASENSE_SKIP_COMFORT_SCHEDULER", "1")
 # Slice 8: skip the nightly anomaly scheduler.
 os.environ.setdefault("CLIMASENSE_SKIP_ANOMALY_SCHEDULER", "1")
+# Slice 9: skip the nightly profile scheduler.
+os.environ.setdefault("CLIMASENSE_SKIP_PROFILE_SCHEDULER", "1")
 
 import pathlib  # noqa: E402
 
@@ -75,6 +77,13 @@ _REAL_ENDPOINTS = {
     # ml tier.
     ("/api/anomalies/latest", "get"),
     ("/api/anomalies", "get"),
+    # Slice 9: /api/profiles/analyze is a REAL ml-tier endpoint now
+    # (calendar-conditioned DayProfiles recompute + MERGE; Pattern
+    # via the SQL CASE function in init-db.sql §4). Not a stub anymore.
+    ("/api/profiles/analyze", "post"),
+    # Slice 9: /api/profiles is a .NET web-tier read of the
+    # `dbo.fv_dayprofiles_at_cursor` TVF — bypasses the ml tier.
+    ("/api/profiles", "get"),
 }
 
 
@@ -139,11 +148,21 @@ def test_contract_endpoint_returns_501(path: str, method: str) -> None:
     # request didn't supply / mint one.
 
 
-def test_at_least_one_stub_endpoint_is_present() -> None:
-    """Sanity floor — guards against accidental removal of stub routes.
+def test_stub_routes_floor_is_zero_after_slice_9() -> None:
+    """Slice 9 promoted the last remaining stub (/api/profiles/analyze)
+    to a real handler. Every contract path that the ml tier owns now
+    has a real implementation; the stub-route list is therefore
+    expected to be empty.
 
     Slice 5 promoted /api/forecast GET + POST from stubs to real
     handlers; slice 7 promoted /api/comfort/score; slice 8 promoted
-    /api/anomalies/detect. Profiles remains stubbed (slice 10).
+    /api/anomalies/detect; slice 9 promoted /api/profiles/analyze.
+
+    If a future slice introduces a new contract path WITHOUT a real
+    handler this assertion will fail until that path either gets a
+    handler or is explicitly added to `_REAL_ENDPOINTS`. That's the
+    intended forcing function.
     """
-    assert len(_stub_routes()) >= 1
+    assert _stub_routes() == [], (
+        "Unexpected un-stubbed contract path(s): " f"{_stub_routes()}"
+    )

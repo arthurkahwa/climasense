@@ -223,6 +223,52 @@ public static class MLProxyEndpoints
             }
         });
 
+        // POST /api/ml/run/profiles — slice 9's "Run Profiles" UI path.
+        // Per issue #11: "POST /api/ml/run/profiles proxied by .NET to
+        // FastAPI's POST /api/profiles/analyze { startDate, endDate }".
+        // The ml-tier handler recomputes DayProfiles via the SQL CASE
+        // classifier baked into init-db.sql. Idempotent on the range
+        // (compute is deterministic + MERGE is keyed on Date). When the
+        // caller omits a body the proxy defaults to "the last 7 cursor
+        // days at the .NET tier's WallClock" — matches the nightly
+        // scheduler's lookback so manual + scheduled runs converge.
+        app.MapPost("/api/ml/run/profiles", async (
+            HttpContext ctx,
+            IMLServiceClient ml,
+            ClimaSense.Web.Clock.IClock clock,
+            CancellationToken ct,
+            ProfilesAnalyzeRequest? body) =>
+        {
+            try
+            {
+                var effectiveBody = body;
+                if (effectiveBody is null)
+                {
+                    var endDate = DateOnly.FromDateTime(clock.UtcNow());
+                    var startDate = endDate.AddDays(-6);
+                    effectiveBody = new ProfilesAnalyzeRequest
+                    {
+                        StartDate = startDate,
+                        EndDate = endDate,
+                    };
+                }
+                var resp = await ml.PostProfilesAnalyzeAsync(effectiveBody, ct).ConfigureAwait(false);
+                return resp is null
+                    ? NotImplemented(ctx, "postProfilesAnalyze")
+                    : Results.Ok(resp);
+            }
+            catch (KiotaProblemDetails kpd)
+            {
+                return MapKiotaProblemDetails(ctx, kpd);
+            }
+            catch (Exception ex) when (ex is MLServiceUnavailableException
+                                          or MLServiceBadGatewayException
+                                          or MLServiceTimeoutException)
+            {
+                return MapFailure(ctx, ex);
+            }
+        });
+
         // POST /api/ml/run/anomalies — slice 8's "Run Anomalies" UI path.
         // Per issue #10: "POST /api/ml/run/anomalies proxied by .NET to
         // FastAPI's POST /api/anomalies/detect { start_date, end_date }".

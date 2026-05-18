@@ -328,25 +328,8 @@ class AnomalyRunSummary(BaseModel):
     regime_shift: int = Field(
         ...,
         alias="regimeShift",
-        description="Post-replace `regime_shift` row count in the 90d scan window. Scan-and-replace means this is the row count *after* the transaction commits, not the net insert count.\n",
+        description="Post-replace `regime_shift` row count in the 90d scan\nwindow. Scan-and-replace means this is the row count\n*after* the transaction commits, not the net insert count.\n",
     )
-
-
-class AnomalyDetectResponse(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-    )
-    inserted: int = Field(
-        ...,
-        description="Total count of new rows committed (idempotent — duplicates are 0). For `regime_shift` this is the post-replace row count (scan-and-replace produces a stable rowset, not net inserts).\n",
-    )
-    total_scanned: int = Field(
-        ...,
-        alias="totalScanned",
-        description="Count of readings scanned by the detectors.",
-    )
-    per_type: AnomalyRunSummary = Field(..., alias="perType")
-    rows: list[AnomalyRow]
 
 
 class ProfilesAnalyzeRequest(BaseModel):
@@ -409,6 +392,49 @@ class ProfilesAnalyzeResponse(BaseModel):
     rows: list[DayProfileRow]
 
 
+class DayProfileRowWithComputedAt(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    date: date_aliased
+    day_of_week: int = Field(
+        ...,
+        alias="dayOfWeek",
+        description="0 = Monday, 6 = Sunday (ISO 8601 weekday).",
+        ge=0,
+        le=6,
+    )
+    mean_residual: float = Field(
+        ...,
+        alias="meanResidual",
+        description="Mean of standardised residuals for the day.",
+    )
+    max_abs_zscore: float = Field(
+        ..., alias="maxAbsZscore", description="Largest absolute z-score for the day."
+    )
+    pattern: Pattern
+    computed_at: AwareDatetime = Field(
+        ...,
+        alias="computedAt",
+        description="When the row was written into `DayProfiles` (UTC).",
+    )
+
+
+class DayProfilesResponse(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    start: date_aliased = Field(
+        ...,
+        description="Resolved window start (inclusive, UTC date). Equals the\nquery `start` when provided; otherwise `end - 30 days`.\n",
+    )
+    end: date_aliased = Field(
+        ...,
+        description="Resolved window end (inclusive, UTC date). Equals the\nquery `end` when provided; otherwise the cursor's\ncalendar date.\n",
+    )
+    rows: list[DayProfileRowWithComputedAt]
+
+
 class ComfortSeason(StrEnum):
     """
     Selected by calendar month + `COMFORT_HEMISPHERE` env var.
@@ -454,6 +480,66 @@ class ComfortScoreResponse(BaseModel):
         alias="averageHumidity",
         description="Mean of the trailing-window relative humidity in %.",
     )
+
+
+class CurrentComfortResponse(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    score: float = Field(
+        ..., description="Most recent comfort score (0–100).", ge=0.0, le=100.0
+    )
+    rating: ComfortRating
+    season: ComfortSeason
+    bucket_time: AwareDatetime = Field(
+        ...,
+        alias="bucketTime",
+        description="The `BucketTime` the row was scored for (UTC).",
+    )
+    computed_at: AwareDatetime = Field(
+        ...,
+        alias="computedAt",
+        description="When the row was written into `ComfortScores` (UTC).",
+    )
+
+
+class LatestAnomalyResponse(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    anomaly_type: AnomalyType = Field(..., alias="anomalyType")
+    reading_time: AwareDatetime = Field(
+        ...,
+        alias="readingTime",
+        description="The `ReadingTime` the anomaly was flagged for (UTC).",
+    )
+    severity: float = Field(
+        ...,
+        description="For `residual_outlier`: |residual| / rolling σ. For the\nother two detectors: 1.0 (binary).\n",
+    )
+    description: str | None = Field(
+        None,
+        description='Optional short free-text description (e.g. `"gap > 10 min"`\nfor `sensor_failure`, `"PELT changepoint detected"` for\n`regime_shift`).\n',
+    )
+    detected_at: AwareDatetime = Field(
+        ..., alias="detectedAt", description="When the detector wrote the row (UTC)."
+    )
+
+
+class AnomaliesResponse(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    start: AwareDatetime = Field(
+        ...,
+        description="Resolved window start (inclusive, UTC). Equals the query\n`start` when provided; otherwise `end - 24h`.\n",
+    )
+    end: AwareDatetime = Field(
+        ...,
+        description="Resolved window end (inclusive, UTC). Equals the query\n`end` when provided; otherwise the cursor.\n",
+    )
+    type: AnomalyType | None = None
+    rows: list[LatestAnomalyResponse]
 
 
 class Provenance(StrEnum):
@@ -511,3 +597,20 @@ class LeaderboardResponse(BaseModel):
         ...,
         description="All rows in `dbo.Leaderboard`, ordered by `mae` ascending.\nEmpty during the brief lifespan window before\n`LeaderboardSeeder` completes.\n",
     )
+
+
+class AnomalyDetectResponse(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    inserted: int = Field(
+        ...,
+        description="Total count of new rows committed (idempotent — duplicates\nare 0). For `regime_shift` this is the post-replace row\ncount (scan-and-replace produces a stable rowset, not net\ninserts).\n",
+    )
+    total_scanned: int = Field(
+        ...,
+        alias="totalScanned",
+        description="Count of readings scanned by the detectors.",
+    )
+    per_type: AnomalyRunSummary = Field(..., alias="perType")
+    rows: list[AnomalyRow]

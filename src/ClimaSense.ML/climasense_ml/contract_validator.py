@@ -133,6 +133,13 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # read both bypass the ml container.
         "LatestAnomalyResponse",
         "AnomaliesResponse",
+        # Slice 9: only referenced by /api/profiles (web-tier-only).
+        # The ml tier *populates* dbo.DayProfiles via the
+        # ProfileEmitter (nightly cron + on-demand
+        # POST /api/profiles/analyze), but the dashboard's range read
+        # bypasses the ml container.
+        "DayProfileRowWithComputedAt",
+        "DayProfilesResponse",
     }
     # Paths declared in the contract for cross-tier audit purposes but
     # NOT served by the FastAPI ml tier (they live on the .NET web tier).
@@ -171,6 +178,12 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # so an ml outage doesn't blank the card.
         "/api/anomalies/latest",
         "/api/anomalies",
+        # Slice 9: /api/profiles is a .NET-tier read of the
+        # `dbo.fv_dayprofiles_at_cursor` TVF — bypasses the ml tier.
+        # The ml tier owns the on-demand POST /api/profiles/analyze
+        # and the nightly recompute; the range read lives on the
+        # web tier so an ml outage doesn't blank the Explorer page.
+        "/api/profiles",
     }
 
     def _strip(node: Any) -> Any:

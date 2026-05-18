@@ -8,6 +8,7 @@ using ClimaSense.Web.Forecasts;
 using ClimaSense.Web.Leaderboard;
 using ClimaSense.Web.Logging;
 using ClimaSense.Web.ML;
+using ClimaSense.Web.Profiles;
 using ClimaSense.Web.Readings;
 using ClimaSense.Web.Sse;
 using Microsoft.AspNetCore.Http.Features;
@@ -177,6 +178,22 @@ builder.Services.AddScoped<AnomalyReadService>(sp =>
     return new AnomalyReadService(
         fetcher.FetchLatestAsync,
         fetcher.FetchRangeAsync);
+});
+
+// ---------------------------------------------------------------------
+// Profiles — slice 9. `ProfileReadService` follows the same
+// delegate-seam pattern. The read goes through
+// `dbo.fv_dayprofiles_at_cursor(@asOf)` so cursor-clipping is enforced
+// by the schema. `dbo.DayProfiles` is populated by the ml-tier's
+// `ProfileEmitter` (nightly cron at 03:00 UTC + on-demand
+// `POST /api/profiles/analyze`); the read path bypasses the ml
+// container.
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<SqlProfileFetcher>();
+builder.Services.AddScoped<ProfileReadService>(sp =>
+{
+    var fetcher = sp.GetRequiredService<SqlProfileFetcher>();
+    return new ProfileReadService(fetcher.FetchRangeAsync);
 });
 
 // ---------------------------------------------------------------------
@@ -463,6 +480,73 @@ app.MapGet("/api/anomalies", async (
     {
         var response = await anomalies
             .GetRangeAsync(cursor, startUtc, endUtc, type, cancellationToken)
+            .ConfigureAwait(false);
+        return Results.Json(response, statusCode: StatusCodes.Status200OK);
+    }
+    catch (ArgumentException ex)
+    {
+        return BadRequest(ctx,
+            error: "invalid_range",
+            message: ex.Message);
+    }
+});
+
+// ---------------------------------------------------------------------
+// Profiles — slice 9. Read-path bypass: web tier reads
+// `dbo.DayProfiles` through `dbo.fv_dayprofiles_at_cursor(@asOf)`
+// directly; the ml container is NOT involved. The table is
+// populated by the ml-tier's `ProfileEmitter` (nightly scheduler
+// + on-demand `POST /api/profiles/analyze`).
+//
+// /api/profiles?start=YYYY-MM-DD&end=YYYY-MM-DD — defaults to
+// "last 30 days at the cursor" when both are omitted. start > end
+// or span > 366 days returns 400.
+// ---------------------------------------------------------------------
+app.MapGet("/api/profiles", async (
+    HttpContext ctx,
+    ProfileReadService profiles,
+    CursorSnapshot cursor,
+    string? start,
+    string? end,
+    CancellationToken cancellationToken) =>
+{
+    DateOnly? startDate = null;
+    DateOnly? endDate = null;
+    if (!string.IsNullOrWhiteSpace(start))
+    {
+        if (!DateOnly.TryParseExact(
+                start,
+                "yyyy-MM-dd",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var parsed))
+        {
+            return BadRequest(ctx,
+                error: "invalid_start",
+                message: "`start` must be an ISO 8601 date (YYYY-MM-DD).");
+        }
+        startDate = parsed;
+    }
+    if (!string.IsNullOrWhiteSpace(end))
+    {
+        if (!DateOnly.TryParseExact(
+                end,
+                "yyyy-MM-dd",
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out var parsed))
+        {
+            return BadRequest(ctx,
+                error: "invalid_end",
+                message: "`end` must be an ISO 8601 date (YYYY-MM-DD).");
+        }
+        endDate = parsed;
+    }
+
+    try
+    {
+        var response = await profiles
+            .GetRangeAsync(cursor, startDate, endDate, cancellationToken)
             .ConfigureAwait(false);
         return Results.Json(response, statusCode: StatusCodes.Status200OK);
     }

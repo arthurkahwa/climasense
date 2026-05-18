@@ -1,4 +1,4 @@
-# ClimaSense — cross-tier wire format (Slice 7 surface).
+# ClimaSense — cross-tier wire format (Slice 9 surface).
 #
 # This file is the source of truth for the .NET ↔ Python contract.
 # Slice 2 introduced the ML-tier request/response surface (forecast /
@@ -33,6 +33,15 @@
 # directly through `dbo.fv_anomalies_at_cursor(@asOf)`. The dashboard
 # gains a "Last anomaly" card; `POST /api/ml/run/anomalies` proxies
 # the on-demand button.
+# Slice 9 (#11) promotes `/api/profiles/analyze` from 501-stub to a
+# real ml-tier handler. Concrete `ProfileComputer` runs the lag-LR
+# in-sample residual + calendar-cohort z-score pipeline; the SQL
+# `dbo.fn_classify_pattern` CASE function (init-db.sql §4) labels
+# the `Pattern` from empirical p90/p25/p75 thresholds derived by
+# `scripts/derive_pattern_thresholds.py`. The web tier adds
+# `/api/profiles` (range read of `dbo.DayProfiles` via the cursor-
+# clipped TVF); `POST /api/ml/run/profiles` proxies the on-demand
+# button.
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
 # JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
@@ -42,7 +51,7 @@
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.8.0-slice-8
+  version: 0.9.0-slice-9
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
@@ -387,15 +396,26 @@ paths:
                 $ref: "#/components/schemas/ProblemDetails"
 
   # -------------------------------------------------------------------
-  # Profiles — calendar-conditioned z-scores; slice 10 implements.
+  # Profiles — calendar-conditioned z-scores. Slice 9 promotes this
+  # from the slice-2 501-stub to a real handler.
   # -------------------------------------------------------------------
   /api/profiles/analyze:
     post:
       summary: Recompute calendar-conditioned day profiles.
       description: |
-        Recomputes `DayProfiles` rows over `[start, end]` using the
-        SQL CASE classifier baked into `init-db.sql`. Idempotent — the
-        scan-and-replace transaction yields stable rows across reruns.
+        Recomputes `dbo.DayProfiles` rows over `[startDate, endDate]`
+        using the empirical SQL CASE classifier
+        `dbo.fn_classify_pattern` baked into `init-db.sql §4` (p90 of
+        MaxAbsZscore, p25/p75 of MeanResidual derived by
+        `scripts/derive_pattern_thresholds.py` over the full
+        `sensor_data.csv` training window). Idempotent on
+        `[startDate, endDate]` — re-running yields identical rows
+        (compute is deterministic; MERGE keyed on Date; Pattern
+        labels are SQL-side and deterministic).
+
+        The compute walks the full hourly history (cohort μ/σ benefit
+        from maximum information) but only the requested `[startDate,
+        endDate]` rows are MERGEd and returned.
       operationId: postProfilesAnalyze
       tags: [profiles]
       requestBody:
@@ -411,26 +431,72 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProfilesAnalyzeResponse"
-        "501":
-          description: Stubbed in slice 2; implemented in slice 10.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetails"
-        "502":
-          description: ml tier returned 5xx.
+        "400":
+          description: |
+            Invalid range — `startDate > endDate` or span exceeds the
+            server-side cap (`MAX_RANGE_DAYS = 366`).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
         "503":
-          description: ml tier unreachable.
+          description: |
+            The underlying `dbo.SensorReadings` had no rows to compute
+            against (typically only during the brief bootstrap window).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-        "504":
-          description: ml tier exceeded the bounded timeout.
+
+  # -------------------------------------------------------------------
+  # Profiles read — slice 9. Web-tier read-path bypass for the
+  # dashboard / Explorer. Reads `dbo.DayProfiles` through
+  # `dbo.fv_dayprofiles_at_cursor(@asOf)` (init-db.sql §3.3). The ml
+  # container is NOT involved.
+  # -------------------------------------------------------------------
+  /api/profiles:
+    get:
+      summary: Range query over `dbo.DayProfiles` (cursor-clipped).
+      description: |
+        Returns all `dbo.DayProfiles` rows whose `Date` falls inside
+        `[start, end]` and whose `ComputedAt` is at or before the
+        cursor, ordered by `Date` ascending. Defaults: `end` → the
+        cursor's calendar date; `start` → `end − 30 days`. The
+        server caps the requested window to 366 days.
+
+        Empty `rows` is a valid 200 response (the nightly recompute
+        may not have populated the window yet; trigger via
+        `POST /api/ml/run/profiles`).
+      operationId: getProfiles
+      tags: [profiles]
+      parameters:
+        - in: query
+          name: start
+          required: false
+          schema:
+            type: string
+            format: date
+          description: |
+            Window start (inclusive, UTC date YYYY-MM-DD). Defaults
+            to `end - 30 days` when omitted.
+        - in: query
+          name: end
+          required: false
+          schema:
+            type: string
+            format: date
+          description: |
+            Window end (inclusive, UTC date). Defaults to the
+            cursor's calendar date when omitted.
+      responses:
+        "200":
+          description: Profile rows in the requested window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DayProfilesResponse"
+        "400":
+          description: Invalid range (start > end or span > 366 days, unparseable date).
           content:
             application/json:
               schema:
@@ -1155,6 +1221,63 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/DayProfileRow"
+
+    # -----------------------------------------------------------------
+    # DayProfilesResponse — slice 9 web-tier read shape. Returned by
+    # `GET /api/profiles?start=&end=`. Carries N rows in `Date ASC`
+    # order plus the resolved window so the caller can confirm what
+    # server-side defaults filled in.
+    # -----------------------------------------------------------------
+    DayProfileRowWithComputedAt:
+      type: object
+      additionalProperties: false
+      required: [date, dayOfWeek, meanResidual, maxAbsZscore, pattern, computedAt]
+      properties:
+        date:
+          type: string
+          format: date
+        dayOfWeek:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0 = Monday, 6 = Sunday (ISO 8601 weekday).
+        meanResidual:
+          type: number
+          format: double
+          description: Mean of standardised residuals for the day.
+        maxAbsZscore:
+          type: number
+          format: double
+          description: Largest absolute z-score for the day.
+        pattern:
+          $ref: "#/components/schemas/Pattern"
+        computedAt:
+          type: string
+          format: date-time
+          description: When the row was written into `DayProfiles` (UTC).
+
+    DayProfilesResponse:
+      type: object
+      additionalProperties: false
+      required: [start, end, rows]
+      properties:
+        start:
+          type: string
+          format: date
+          description: |
+            Resolved window start (inclusive, UTC date). Equals the
+            query `start` when provided; otherwise `end - 30 days`.
+        end:
+          type: string
+          format: date
+          description: |
+            Resolved window end (inclusive, UTC date). Equals the
+            query `end` when provided; otherwise the cursor's
+            calendar date.
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/DayProfileRowWithComputedAt"
 
     # -----------------------------------------------------------------
     # Comfort
