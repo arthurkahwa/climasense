@@ -151,6 +151,72 @@
         .rating-acceptable { color: #79c0ff; }
         .rating-marginal { color: #d29922; }
         .rating-uncomfortable { color: #f85149; }
+        /* Slice 8: anomaly card */
+        .anomaly-card {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1.5rem;
+            align-items: center;
+            background: linear-gradient(145deg, #161b22, #0d1117);
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 1.25rem 1.75rem;
+            margin: 1rem 0 2rem 0;
+        }
+        .anomaly-card .field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+        .anomaly-card .label {
+            color: #8b949e;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .anomaly-card .value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #f0f6fc;
+            line-height: 1;
+        }
+        .anomaly-card .meta {
+            grid-column: 1 / -1;
+            color: #8b949e;
+            font-size: 0.85rem;
+            border-top: 1px solid #30363d;
+            padding-top: 0.75rem;
+        }
+        .anomaly-card.error .value,
+        .anomaly-card.empty .value {
+            color: #8b949e;
+            font-size: 1.25rem;
+            font-weight: 500;
+        }
+        .anomaly-pill {
+            display: inline-block;
+            padding: 0.2rem 0.6rem;
+            border-radius: 999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-transform: lowercase;
+            letter-spacing: 0.02em;
+        }
+        .anomaly-pill.sensor_failure {
+            background: rgba(248, 81, 73, 0.15);
+            color: #f85149;
+            border: 1px solid rgba(248, 81, 73, 0.35);
+        }
+        .anomaly-pill.regime_shift {
+            background: rgba(210, 153, 34, 0.15);
+            color: #d29922;
+            border: 1px solid rgba(210, 153, 34, 0.35);
+        }
+        .anomaly-pill.residual_outlier {
+            background: rgba(121, 192, 255, 0.15);
+            color: #79c0ff;
+            border: 1px solid rgba(121, 192, 255, 0.35);
+        }
     </style>
 </head>
 <body>
@@ -191,6 +257,32 @@
         <div class="meta" id="latest-meta">
             Fetching latest reading from
             <code>/api/readings/latest</code>&hellip;
+        </div>
+    </section>
+
+    <!-- ============================================== -->
+    <!-- Slice 8: last anomaly card                    -->
+    <!-- ============================================== -->
+    <section class="anomaly-card" id="anomaly-card">
+        <div class="field">
+            <span class="label">Last anomaly</span>
+            <span class="value" id="anomaly-type-wrap">
+                <span id="anomaly-type">&hellip;</span>
+            </span>
+        </div>
+        <div class="field">
+            <span class="label">Severity</span>
+            <span class="value">
+                <span id="anomaly-severity">&hellip;</span>
+            </span>
+        </div>
+        <div class="field">
+            <span class="label">Detected</span>
+            <span class="value" id="anomaly-detected">&hellip;</span>
+        </div>
+        <div class="meta" id="anomaly-meta">
+            Fetching latest anomaly from
+            <code>/api/anomalies/latest</code>&hellip;
         </div>
     </section>
 
@@ -251,6 +343,34 @@
                 <code>GET /api/comfort/score?hours=24</code> for
                 on-demand recompute (idempotent on the cursor's
                 bucket).</li>
+        </ul>
+    </section>
+
+    <section class="panel">
+        <strong>What slice 8 ships</strong>
+        <ul class="legend">
+            <li>Three concrete anomaly detectors on the ml tier (per
+                ADR-0002 + ADR-0011: no <code>IAnomalyStrategy</code>
+                seam): <code>SensorFailureRules</code> (SQL window
+                functions, 24h scan, gap/stuck/range),
+                <code>ResidualOutlierDetector</code> (consumes the
+                boot-fitted <code>LagLinearForecaster</code>), and
+                <code>ChangepointDetector</code> (PELT via
+                <code>ruptures</code>, 90d scan-and-replace inside an
+                <code>sp_getapplock</code>-guarded transaction).</li>
+            <li>Per-type idempotency in the schema:
+                <code>UNIQUE (AnomalyType, ReadingTime)</code> plus
+                <code>INSERT … WHERE NOT EXISTS</code> for the
+                point-in-time detectors; the changepoint detector
+                scans-and-replaces deterministically.</li>
+            <li>Nightly APScheduler <code>cron</code> job at 02:00 UTC
+                runs all three detectors; <code>POST /api/ml/run/anomalies</code>
+                triggers the same pipeline on demand.</li>
+            <li><code>GET /api/anomalies/latest</code> +
+                <code>GET /api/anomalies?start=&amp;end=&amp;type=</code>
+                served by the .NET tier directly from
+                <code>dbo.fv_anomalies_at_cursor(@@asOf)</code> —
+                read-path bypass.</li>
         </ul>
     </section>
 
@@ -436,6 +556,117 @@
                     seasonEl.textContent = capitalize(body.season);
                     // Colour the rating wrapper by rating band.
                     ratingWrap.classList.add('rating-' + body.rating);
+                    renderMeta(body);
+                })
+                .catch(function (err) {
+                    renderError(err && err.message ? err.message : 'unknown error');
+                });
+        })();
+
+        // ----------------------------------------------------------------
+        // Slice 8: last anomaly
+        // ----------------------------------------------------------------
+        (function () {
+            var typeEl = document.getElementById('anomaly-type');
+            var typeWrap = document.getElementById('anomaly-type-wrap');
+            var severityEl = document.getElementById('anomaly-severity');
+            var detectedEl = document.getElementById('anomaly-detected');
+            var metaEl = document.getElementById('anomaly-meta');
+            var cardEl = document.getElementById('anomaly-card');
+
+            var TYPE_LABEL = {
+                sensor_failure: 'Sensor failure',
+                regime_shift: 'Regime shift',
+                residual_outlier: 'Residual outlier'
+            };
+
+            function formatTimestamp(iso) {
+                try {
+                    var d = new Date(iso);
+                    return d.toLocaleString(undefined, {
+                        year: 'numeric', month: 'short', day: '2-digit',
+                        hour: '2-digit', minute: '2-digit',
+                        timeZoneName: 'short',
+                    });
+                } catch (e) {
+                    return iso;
+                }
+            }
+
+            function renderMeta(body) {
+                while (metaEl.firstChild) {
+                    metaEl.removeChild(metaEl.firstChild);
+                }
+                metaEl.appendChild(document.createTextNode('reading at '));
+                var ts = document.createElement('strong');
+                ts.textContent = formatTimestamp(body.readingTime);
+                metaEl.appendChild(ts);
+                if (body.description) {
+                    metaEl.appendChild(document.createTextNode(' · '));
+                    metaEl.appendChild(document.createTextNode(body.description));
+                }
+                metaEl.appendChild(document.createTextNode(' · source: '));
+                var code = document.createElement('code');
+                code.textContent = 'Anomalies';
+                metaEl.appendChild(code);
+                metaEl.appendChild(document.createTextNode(
+                    ' (latest row, cursor-clipped)'));
+            }
+
+            function renderEmpty(message) {
+                cardEl.classList.add('empty');
+                typeEl.textContent = 'none yet';
+                severityEl.textContent = '—';
+                detectedEl.textContent = '—';
+                metaEl.textContent = message;
+            }
+
+            function renderError(message) {
+                cardEl.classList.add('error');
+                typeEl.textContent = '—';
+                severityEl.textContent = '—';
+                detectedEl.textContent = '—';
+                metaEl.textContent =
+                    '/api/anomalies/latest: ' + message;
+            }
+
+            fetch('/api/anomalies/latest', { headers: { 'Accept': 'application/json' } })
+                .then(function (resp) {
+                    if (resp.status === 404) {
+                        return resp.json().then(function (body) {
+                            renderEmpty((body && body.message) ||
+                                'no anomalies have been detected yet');
+                            return null;
+                        }, function () {
+                            renderEmpty('no anomalies have been detected yet');
+                            return null;
+                        });
+                    }
+                    if (!resp.ok) {
+                        return resp.json().then(function (body) {
+                            throw {
+                                status: resp.status,
+                                error: body && body.error,
+                                message: body && body.message
+                            };
+                        }, function () {
+                            throw {
+                                status: resp.status,
+                                error: 'http_error',
+                                message: 'HTTP ' + resp.status
+                            };
+                        });
+                    }
+                    return resp.json();
+                })
+                .then(function (body) {
+                    if (!body) return; // 404 path already rendered.
+                    // body: { anomalyType, readingTime, severity, description, detectedAt }
+                    // Render the type pill — colour comes from the class.
+                    typeEl.classList.add('anomaly-pill', body.anomalyType);
+                    typeEl.textContent = TYPE_LABEL[body.anomalyType] || body.anomalyType;
+                    severityEl.textContent = (Number(body.severity)).toFixed(2);
+                    detectedEl.textContent = formatTimestamp(body.detectedAt);
                     renderMeta(body);
                 })
                 .catch(function (err) {

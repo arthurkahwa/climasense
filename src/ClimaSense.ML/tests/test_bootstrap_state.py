@@ -22,6 +22,10 @@ import os
 os.environ.setdefault("CLIMASENSE_HEALTH_SKIP_DB", "1")
 os.environ.setdefault("CLIMASENSE_CONTRACT_SKIP_VALIDATION", "1")
 os.environ.setdefault("CLIMASENSE_SKIP_BOOTSTRAP", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_FIT", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_SCHEDULER", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_COMFORT_SCHEDULER", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_ANOMALY_SCHEDULER", "1")
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

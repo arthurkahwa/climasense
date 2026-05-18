@@ -23,6 +23,8 @@ os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_FIT", "1")
 os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_SCHEDULER", "1")
 # Slice 7: skip the comfort scheduler (no DB available in this test).
 os.environ.setdefault("CLIMASENSE_SKIP_COMFORT_SCHEDULER", "1")
+# Slice 8: skip the nightly anomaly scheduler.
+os.environ.setdefault("CLIMASENSE_SKIP_ANOMALY_SCHEDULER", "1")
 
 import pathlib  # noqa: E402
 
@@ -64,6 +66,15 @@ _REAL_ENDPOINTS = {
     # Slice 7: /api/comfort/current is a .NET web-tier read of the
     # `dbo.fv_comfortscores_at_cursor` TVF — bypasses the ml tier.
     ("/api/comfort/current", "get"),
+    # Slice 8: /api/anomalies/detect is a REAL ml-tier endpoint now
+    # (three-detector pipeline + cursor-clipped read of the rows that
+    # landed). Not a stub anymore.
+    ("/api/anomalies/detect", "post"),
+    # Slice 8: /api/anomalies/latest + /api/anomalies are .NET web-tier
+    # reads of the `dbo.fv_anomalies_at_cursor` TVF — both bypass the
+    # ml tier.
+    ("/api/anomalies/latest", "get"),
+    ("/api/anomalies", "get"),
 }
 
 
@@ -128,11 +139,11 @@ def test_contract_endpoint_returns_501(path: str, method: str) -> None:
     # request didn't supply / mint one.
 
 
-def test_at_least_two_stub_endpoints_are_present() -> None:
+def test_at_least_one_stub_endpoint_is_present() -> None:
     """Sanity floor — guards against accidental removal of stub routes.
 
     Slice 5 promoted /api/forecast GET + POST from stubs to real
-    handlers; slice 7 promoted /api/comfort/score. Anomalies and
-    profiles remain stubbed.
+    handlers; slice 7 promoted /api/comfort/score; slice 8 promoted
+    /api/anomalies/detect. Profiles remains stubbed (slice 10).
     """
-    assert len(_stub_routes()) >= 2
+    assert len(_stub_routes()) >= 1

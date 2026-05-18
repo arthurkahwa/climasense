@@ -311,18 +311,41 @@ class AnomalyRow(BaseModel):
     )
 
 
+class AnomalyRunSummary(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    sensor_failure: int = Field(
+        ...,
+        alias="sensorFailure",
+        description="Newly-inserted `sensor_failure` rows in the 24h scan window.",
+    )
+    residual_outlier: int = Field(
+        ...,
+        alias="residualOutlier",
+        description="Newly-inserted `residual_outlier` rows in the 24h scan window.",
+    )
+    regime_shift: int = Field(
+        ...,
+        alias="regimeShift",
+        description="Post-replace `regime_shift` row count in the 90d scan window. Scan-and-replace means this is the row count *after* the transaction commits, not the net insert count.\n",
+    )
+
+
 class AnomalyDetectResponse(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
     inserted: int = Field(
-        ..., description="Count of new rows committed (idempotent — duplicates are 0)."
+        ...,
+        description="Total count of new rows committed (idempotent — duplicates are 0). For `regime_shift` this is the post-replace row count (scan-and-replace produces a stable rowset, not net inserts).\n",
     )
     total_scanned: int = Field(
         ...,
         alias="totalScanned",
         description="Count of readings scanned by the detectors.",
     )
+    per_type: AnomalyRunSummary = Field(..., alias="perType")
     rows: list[AnomalyRow]
 
 

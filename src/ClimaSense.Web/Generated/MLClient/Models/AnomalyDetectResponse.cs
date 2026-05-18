@@ -12,8 +12,16 @@ namespace ClimaSense.Web.Generated.MLClient.Models
     public partial class AnomalyDetectResponse : IParsable
     #pragma warning restore CS1591
     {
-        /// <summary>Count of new rows committed (idempotent — duplicates are 0).</summary>
+        /// <summary>Total count of new rows committed (idempotent — duplicatesare 0). For `regime_shift` this is the post-replace rowcount (scan-and-replace produces a stable rowset, not netinserts).</summary>
         public int? Inserted { get; set; }
+        /// <summary>The perType property</summary>
+#if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
+#nullable enable
+        public global::ClimaSense.Web.Generated.MLClient.Models.AnomalyRunSummary? PerType { get; set; }
+#nullable restore
+#else
+        public global::ClimaSense.Web.Generated.MLClient.Models.AnomalyRunSummary PerType { get; set; }
+#endif
         /// <summary>The rows property</summary>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
@@ -43,6 +51,7 @@ namespace ClimaSense.Web.Generated.MLClient.Models
             return new Dictionary<string, Action<IParseNode>>
             {
                 { "inserted", n => { Inserted = n.GetIntValue(); } },
+                { "perType", n => { PerType = n.GetObjectValue<global::ClimaSense.Web.Generated.MLClient.Models.AnomalyRunSummary>(global::ClimaSense.Web.Generated.MLClient.Models.AnomalyRunSummary.CreateFromDiscriminatorValue); } },
                 { "rows", n => { Rows = n.GetCollectionOfObjectValues<global::ClimaSense.Web.Generated.MLClient.Models.AnomalyRow>(global::ClimaSense.Web.Generated.MLClient.Models.AnomalyRow.CreateFromDiscriminatorValue)?.AsList(); } },
                 { "totalScanned", n => { TotalScanned = n.GetIntValue(); } },
             };
@@ -55,6 +64,7 @@ namespace ClimaSense.Web.Generated.MLClient.Models
         {
             if(ReferenceEquals(writer, null)) throw new ArgumentNullException(nameof(writer));
             writer.WriteIntValue("inserted", Inserted);
+            writer.WriteObjectValue<global::ClimaSense.Web.Generated.MLClient.Models.AnomalyRunSummary>("perType", PerType);
             writer.WriteCollectionOfObjectValues<global::ClimaSense.Web.Generated.MLClient.Models.AnomalyRow>("rows", Rows);
             writer.WriteIntValue("totalScanned", TotalScanned);
         }

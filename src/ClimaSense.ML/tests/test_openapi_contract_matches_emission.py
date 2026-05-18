@@ -42,6 +42,7 @@ os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_FIT", "1")
 os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_SCHEDULER", "1")
 os.environ.setdefault("CLIMASENSE_SKIP_LEADERBOARD_SEED", "1")
 os.environ.setdefault("CLIMASENSE_SKIP_COMFORT_SCHEDULER", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_ANOMALY_SCHEDULER", "1")
 
 from climasense_ml.contract_validator import (  # noqa: E402
     ContractMismatchError,

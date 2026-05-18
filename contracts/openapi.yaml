@@ -24,6 +24,15 @@
 # replay-hour. The dashboard's comfort card reads through a new
 # web-tier-only `/api/comfort/current` (the `dbo.fv_comfortscores_at_cursor`
 # TVF — read-path bypass).
+# Slice 8 (#10) promotes `/api/anomalies/detect` from 501-stub to a real
+# ml-tier handler. Three concrete detector modules run in sequence
+# (`SensorFailureRules`, `ResidualOutlierDetector`,
+# `ChangepointDetector`) with per-type idempotency. The web tier
+# surfaces two new read endpoints — `/api/anomalies/latest` and
+# `/api/anomalies` (range + type filter) — both reading SQL Server
+# directly through `dbo.fv_anomalies_at_cursor(@asOf)`. The dashboard
+# gains a "Last anomaly" card; `POST /api/ml/run/anomalies` proxies
+# the on-demand button.
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
 # JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
@@ -33,7 +42,7 @@
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.7.0-slice-7
+  version: 0.8.0-slice-8
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
@@ -272,7 +281,9 @@ paths:
         - `regime_shift` — `sp_getapplock`-guarded scan-and-replace over
           a 90-day lookback. Longer; default timeout **60 s**.
 
-        Idempotent per `UNIQUE (AnomalyType, ReadingTime)`.
+        Idempotent per `UNIQUE (AnomalyType, ReadingTime)`. Slice 8
+        promotes this handler from the slice-2 501-stub to the real
+        three-detector pipeline.
       operationId: postAnomaliesDetect
       tags: [anomalies]
       requestBody:
@@ -288,26 +299,88 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/AnomalyDetectResponse"
-        "501":
-          description: Stubbed in slice 2; implemented in slice 9.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetails"
-        "502":
-          description: ml tier returned 5xx.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ProblemDetails"
         "503":
-          description: ml tier unreachable.
+          description: Detector dependency missing (forecaster not boot-fitted yet).
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-        "504":
-          description: ml tier exceeded the 60 s changepoint timeout.
+
+  # -------------------------------------------------------------------
+  # Anomalies — web-tier read surface. Slice 8 ships the "Last
+  # anomaly" card on the dashboard plus a range/type-filter list
+  # endpoint. Both read SQL Server directly through
+  # `dbo.fv_anomalies_at_cursor(@asOf)` so the read path bypasses the
+  # ml tier entirely.
+  # -------------------------------------------------------------------
+  /api/anomalies/latest:
+    get:
+      summary: Return the most recent anomaly visible at the cursor.
+      description: |
+        Returns the row from `dbo.Anomalies` with the largest
+        `DetectedAt` that is less-than-or-equal-to the current cursor.
+        Reads the inline TVF `dbo.fv_anomalies_at_cursor(@asOf)` —
+        cursor-clipping is a property of the schema. Returns 404 when
+        no anomaly is visible (typical before any detector has fired).
+      operationId: getAnomaliesLatest
+      tags: [anomalies]
+      responses:
+        "200":
+          description: Latest anomaly at the cursor.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LatestAnomalyResponse"
+        "404":
+          description: No anomaly rows visible at the cursor yet.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  /api/anomalies:
+    get:
+      summary: Range query over `dbo.Anomalies` with optional type filter.
+      description: |
+        Returns all anomalies in `[start, end]` visible at the cursor,
+        ordered by `ReadingTime DESC`. `type` filters to a single
+        `AnomalyType` when provided. Window is bounded server-side to
+        90 days (the changepoint scan window). Web tier reads SQL
+        Server directly through `dbo.fv_anomalies_at_cursor(@asOf)`.
+      operationId: getAnomalies
+      tags: [anomalies]
+      parameters:
+        - in: query
+          name: start
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: |
+            Window start (inclusive, UTC). Defaults to `end - 24h`
+            when omitted.
+        - in: query
+          name: end
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Window end (inclusive, UTC). Defaults to the cursor.
+        - in: query
+          name: type
+          required: false
+          schema:
+            $ref: "#/components/schemas/AnomalyType"
+          description: Filter to a single anomaly type. Omit for all three.
+      responses:
+        "200":
+          description: Anomalies in the requested window.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnomaliesResponse"
+        "400":
+          description: Invalid query (e.g. `start > end` or unparseable date).
           content:
             application/json:
               schema:
@@ -982,18 +1055,45 @@ components:
     AnomalyDetectResponse:
       type: object
       additionalProperties: false
-      required: [inserted, totalScanned, rows]
+      required: [inserted, totalScanned, rows, perType]
       properties:
         inserted:
           type: integer
-          description: Count of new rows committed (idempotent — duplicates are 0).
+          description: |
+            Total count of new rows committed (idempotent — duplicates
+            are 0). For `regime_shift` this is the post-replace row
+            count (scan-and-replace produces a stable rowset, not net
+            inserts).
         totalScanned:
           type: integer
           description: Count of readings scanned by the detectors.
+        perType:
+          $ref: "#/components/schemas/AnomalyRunSummary"
         rows:
           type: array
           items:
             $ref: "#/components/schemas/AnomalyRow"
+
+    # Per-type breakdown returned by the orchestrator. Mirrors the
+    # `AnomalyRunSummary` dataclass on the ml tier so the wire shape
+    # is what the orchestrator returns verbatim.
+    AnomalyRunSummary:
+      type: object
+      additionalProperties: false
+      required: [sensorFailure, residualOutlier, regimeShift]
+      properties:
+        sensorFailure:
+          type: integer
+          description: Newly-inserted `sensor_failure` rows in the 24h scan window.
+        residualOutlier:
+          type: integer
+          description: Newly-inserted `residual_outlier` rows in the 24h scan window.
+        regimeShift:
+          type: integer
+          description: |
+            Post-replace `regime_shift` row count in the 90d scan
+            window. Scan-and-replace means this is the row count
+            *after* the transaction commits, not the net insert count.
 
     # -----------------------------------------------------------------
     # Profiles
@@ -1130,6 +1230,72 @@ components:
           type: string
           format: date-time
           description: When the row was written into `ComfortScores` (UTC).
+
+    # -----------------------------------------------------------------
+    # LatestAnomalyResponse — slice 8 web-tier read shape. Returned by
+    # `GET /api/anomalies/latest` (the dashboard's "Last anomaly"
+    # card). One row, the most recent `dbo.Anomalies` row visible at
+    # the cursor (largest `DetectedAt`). All four columns surfaced so
+    # the dashboard pill, severity, and tooltip can render off a
+    # single fetch.
+    # -----------------------------------------------------------------
+    LatestAnomalyResponse:
+      type: object
+      additionalProperties: false
+      required: [anomalyType, readingTime, severity, detectedAt]
+      properties:
+        anomalyType:
+          $ref: "#/components/schemas/AnomalyType"
+        readingTime:
+          type: string
+          format: date-time
+          description: The `ReadingTime` the anomaly was flagged for (UTC).
+        severity:
+          type: number
+          format: double
+          description: |
+            For `residual_outlier`: |residual| / rolling σ. For the
+            other two detectors: 1.0 (binary).
+        description:
+          type: string
+          description: |
+            Optional short free-text description (e.g. `"gap > 10 min"`
+            for `sensor_failure`, `"PELT changepoint detected"` for
+            `regime_shift`).
+        detectedAt:
+          type: string
+          format: date-time
+          description: When the detector wrote the row (UTC).
+
+    # -----------------------------------------------------------------
+    # AnomaliesResponse — slice 8 web-tier read shape. Returned by
+    # `GET /api/anomalies?start=&end=&type=`. Carries N rows in
+    # `ReadingTime DESC` order plus the resolved window so the caller
+    # can confirm what server-side defaults filled in.
+    # -----------------------------------------------------------------
+    AnomaliesResponse:
+      type: object
+      additionalProperties: false
+      required: [start, end, rows]
+      properties:
+        start:
+          type: string
+          format: date-time
+          description: |
+            Resolved window start (inclusive, UTC). Equals the query
+            `start` when provided; otherwise `end - 24h`.
+        end:
+          type: string
+          format: date-time
+          description: |
+            Resolved window end (inclusive, UTC). Equals the query
+            `end` when provided; otherwise the cursor.
+        type:
+          $ref: "#/components/schemas/AnomalyType"
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/LatestAnomalyResponse"
 
     # -----------------------------------------------------------------
     # Leaderboard — slice 6. `provenance` distinguishes notebook rows

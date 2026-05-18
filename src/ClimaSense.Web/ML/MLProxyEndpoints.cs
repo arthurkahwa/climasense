@@ -17,12 +17,14 @@
 
 #nullable enable
 
+using System.Collections.Generic;
 using ClimaSense.Web.Logging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Kiota.Abstractions;
 using AnomalyDetectRequest = ClimaSense.Web.Generated.MLClient.Models.AnomalyDetectRequest;
+using AnomalyType = ClimaSense.Web.Generated.MLClient.Models.AnomalyType;
 using ForecastRequest = ClimaSense.Web.Generated.MLClient.Models.ForecastRequest;
 using KiotaProblemDetails = ClimaSense.Web.Generated.MLClient.Models.ProblemDetails;
 using ProfilesAnalyzeRequest = ClimaSense.Web.Generated.MLClient.Models.ProfilesAnalyzeRequest;
@@ -211,6 +213,48 @@ public static class MLProxyEndpoints
                 // Kiota raises this on any documented error response code
                 // for which we registered an error mapping (501, 502, 503, 504).
                 // Slice 2: every contract endpoint returns 501 in practice.
+                return MapKiotaProblemDetails(ctx, kpd);
+            }
+            catch (Exception ex) when (ex is MLServiceUnavailableException
+                                          or MLServiceBadGatewayException
+                                          or MLServiceTimeoutException)
+            {
+                return MapFailure(ctx, ex);
+            }
+        });
+
+        // POST /api/ml/run/anomalies — slice 8's "Run Anomalies" UI path.
+        // Per issue #10: "POST /api/ml/run/anomalies proxied by .NET to
+        // FastAPI's POST /api/anomalies/detect { start_date, end_date }".
+        // The ml-tier handler runs the three-detector pipeline at the
+        // current cursor and returns an AnomalyDetectResponse envelope
+        // verbatim. Idempotent on the cursor (per-type idempotency in
+        // the writer). Default body of `{ types: [all-three] }` is
+        // honoured when the caller omits one.
+        app.MapPost("/api/ml/run/anomalies", async (
+            HttpContext ctx,
+            IMLServiceClient ml,
+            CancellationToken ct,
+            AnomalyDetectRequest? body) =>
+        {
+            try
+            {
+                var effectiveBody = body ?? new AnomalyDetectRequest
+                {
+                    Types = new List<AnomalyType?>
+                    {
+                        AnomalyType.Sensor_failure,
+                        AnomalyType.Residual_outlier,
+                        AnomalyType.Regime_shift,
+                    },
+                };
+                var resp = await ml.PostAnomaliesDetectAsync(effectiveBody, ct).ConfigureAwait(false);
+                return resp is null
+                    ? NotImplemented(ctx, "postAnomaliesDetect")
+                    : Results.Ok(resp);
+            }
+            catch (KiotaProblemDetails kpd)
+            {
                 return MapKiotaProblemDetails(ctx, kpd);
             }
             catch (Exception ex) when (ex is MLServiceUnavailableException

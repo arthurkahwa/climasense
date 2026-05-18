@@ -1,12 +1,13 @@
 """FastAPI entry point for the ML tier.
 
-Slice 7 surface (everything from slice 5/6 plus live comfort scoring):
+Slice 8 surface (everything from slice 5/6/7 plus three-detector
+anomaly pipeline):
   * GET  /api/health/live         — process up, no dependency check.
   * GET  /api/health/ready        — DB + bootstrap + forecaster fitted probe.
   * GET  /api/health              — combined alias (never 503; deps in `checks`).
   * GET  /api/forecast            — read latest forecast at cursor (slice 5).
   * POST /api/forecast            — boot-fit emission + persist (slice 5).
-  * POST /api/anomalies/detect    — slice-9 stub (501).
+  * POST /api/anomalies/detect    — three-detector pipeline at cursor (slice 8).
   * POST /api/profiles/analyze    — slice-10 stub (501).
   * GET  /api/comfort/score       — ASHRAE 55 graphical zone (slice 7).
 
@@ -51,6 +52,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .anomaly_changepoint import ChangepointDetector
+from .anomaly_orchestrator import run_safely as run_anomaly_detectors_safely
+from .anomaly_residual import ResidualOutlierDetector
+from .anomaly_router import build_router as build_anomaly_router
+from .anomaly_sensor_failure import SensorFailureRules
 from .clock import IClock, WallClock
 from .comfort import Hemisphere, hemisphere_from_env
 from .comfort_emitter import ComfortEmitter
@@ -688,6 +694,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             comfort_sched.shutdown(wait=False)
         except Exception:  # noqa: BLE001
             log.exception("Comfort scheduler: shutdown raised")
+    anomaly_sched = getattr(app.state, "anomaly_scheduler", None)
+    if anomaly_sched is not None:
+        try:
+            anomaly_sched.shutdown(wait=False)
+        except Exception:  # noqa: BLE001
+            log.exception("Anomaly scheduler: shutdown raised")
 
 
 async def _await_bootstrap_then_fit(app: FastAPI) -> None:
@@ -781,11 +793,29 @@ async def _await_bootstrap_then_fit(app: FastAPI) -> None:
         log.info(
             "Forecast scheduler: SKIPPED (CLIMASENSE_SKIP_FORECAST_SCHEDULER)"
         )
+    else:
+        try:
+            _register_forecast_scheduler(app)
+        except Exception:  # noqa: BLE001
+            log.exception("Forecast scheduler: registration failed")
+
+    # ----------------------------------------------------------------
+    # Anomaly scheduler (slice 8). Nightly job — runs all three
+    # detectors at 02:00 UTC. Uses `run_safely` so a failure in any
+    # one detector does NOT silence the other two.
+    # ----------------------------------------------------------------
+    skip_anomaly = os.environ.get(
+        "CLIMASENSE_SKIP_ANOMALY_SCHEDULER", ""
+    ).lower() in ("1", "true", "yes")
+    if skip_anomaly:
+        log.info(
+            "Anomaly scheduler: SKIPPED (CLIMASENSE_SKIP_ANOMALY_SCHEDULER)"
+        )
         return
     try:
-        _register_forecast_scheduler(app)
+        _register_anomaly_scheduler(app)
     except Exception:  # noqa: BLE001
-        log.exception("Forecast scheduler: registration failed")
+        log.exception("Anomaly scheduler: registration failed")
 
 
 def _register_forecast_scheduler(app: FastAPI) -> None:
@@ -870,12 +900,86 @@ def _register_comfort_scheduler(app: FastAPI) -> None:
     )
 
 
+def _register_anomaly_scheduler(app: FastAPI) -> None:
+    """Register the nightly APScheduler `cron` job for anomaly detection.
+
+    Fires once per wall-day at 02:00 UTC. Each tick constructs a fresh
+    `CursorSnapshot`, builds the three detectors, and runs them via
+    `run_safely` (per-detector exception-swallow) so a transient SQL
+    error doesn't poison the next night.
+
+    The job is also re-callable on demand via
+    `POST /api/anomalies/detect` (handled by `anomaly_router`); that
+    path constructs the same detectors and runs them inside the HTTP
+    request scope so the reviewer sees the per-type counts in the
+    response.
+    """
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    log = logging.getLogger("climasense_ml.scheduler")
+
+    forecaster = _forecaster_tracker.forecaster
+    if forecaster is None:
+        log.warning(
+            "Anomaly scheduler: forecaster unavailable; skipping registration "
+            "(ResidualOutlierDetector requires a boot-fitted forecaster)"
+        )
+        return
+
+    engine = get_engine()
+
+    def _tick() -> None:
+        snap = CursorSnapshot.from_clock(_clock)
+        try:
+            sf = SensorFailureRules(engine=engine)
+            ro = ResidualOutlierDetector(
+                engine=engine, forecaster=forecaster
+            )
+            cp = ChangepointDetector(engine=engine)
+            summary = run_anomaly_detectors_safely(
+                snap,
+                sensor_failure_rules=sf,
+                residual_outlier_detector=ro,
+                changepoint_detector=cp,
+            )
+            log.info(
+                "Anomaly scheduler: tick complete cursor=%s "
+                "sensor_failure=%d residual_outlier=%d regime_shift=%d",
+                snap.as_of.isoformat(),
+                summary.sensor_failure,
+                summary.residual_outlier,
+                summary.regime_shift,
+            )
+        except Exception:  # noqa: BLE001 — keep the scheduler ticking
+            log.exception(
+                "Anomaly scheduler: tick failed at cursor=%s",
+                snap.as_of.isoformat(),
+            )
+
+    scheduler = BackgroundScheduler(daemon=True, timezone="UTC")
+    # Nightly cron at 02:00 UTC. The cadence is wall-time; under
+    # slice-12 ReplayClock the same cron tick will run with whatever
+    # cursor the replay clock holds at that wall-time moment.
+    scheduler.add_job(
+        _tick,
+        trigger="cron",
+        hour=2,
+        minute=0,
+        id="anomaly-nightly",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    app.state.anomaly_scheduler = scheduler
+    log.info("Anomaly scheduler: started (cron daily at 02:00 UTC)")
+
+
 # ---------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------
 app = FastAPI(
     title="ClimaSense.ML",
-    version="0.7.0-slice-7",
+    version="0.8.0-slice-8",
     lifespan=lifespan,
 )
 app.add_middleware(CursorScopeMiddleware)
@@ -903,9 +1007,20 @@ app.include_router(
     )
 )
 
-# Stub routes for the still-pending contract surface (anomalies /
-# profiles). Slice 5 dropped /api/forecast (now real) from this
-# router; slice 7 dropped /api/comfort/score.
+# Slice 8: real /api/anomalies/detect handler (three-detector
+# pipeline). Registered BEFORE the stub router so the stub router no
+# longer carries anomalies.
+app.include_router(
+    build_anomaly_router(
+        get_engine=get_engine,
+        get_cursor=get_cursor,
+        get_forecaster=get_forecaster,
+    )
+)
+
+# Stub routes for the still-pending contract surface (profiles).
+# Slice 5 dropped /api/forecast (now real) from this router; slice 7
+# dropped /api/comfort/score; slice 8 dropped /api/anomalies/detect.
 app.include_router(stubs_router)
 
 

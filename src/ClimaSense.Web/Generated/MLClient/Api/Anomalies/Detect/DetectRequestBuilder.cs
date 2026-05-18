@@ -34,16 +34,13 @@ namespace ClimaSense.Web.Generated.MLClient.Api.Anomalies.Detect
         {
         }
         /// <summary>
-        /// Invokes the appropriate detector(s) against the cursor window.- `sensor_failure` / `residual_outlier` — INSERT … WHERE NOT EXISTS  over a 24-hour lookback. Cheap; default timeout 30 s.- `regime_shift` — `sp_getapplock`-guarded scan-and-replace over  a 90-day lookback. Longer; default timeout **60 s**.Idempotent per `UNIQUE (AnomalyType, ReadingTime)`.
+        /// Invokes the appropriate detector(s) against the cursor window.- `sensor_failure` / `residual_outlier` — INSERT … WHERE NOT EXISTS  over a 24-hour lookback. Cheap; default timeout 30 s.- `regime_shift` — `sp_getapplock`-guarded scan-and-replace over  a 90-day lookback. Longer; default timeout **60 s**.Idempotent per `UNIQUE (AnomalyType, ReadingTime)`. Slice 8promotes this handler from the slice-2 501-stub to the realthree-detector pipeline.
         /// </summary>
         /// <returns>A <see cref="global::ClimaSense.Web.Generated.MLClient.Models.AnomalyDetectResponse"/></returns>
         /// <param name="body">The request body</param>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
-        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 501 status code</exception>
-        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 502 status code</exception>
         /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 503 status code</exception>
-        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 504 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public async Task<global::ClimaSense.Web.Generated.MLClient.Models.AnomalyDetectResponse?> PostAsync(global::ClimaSense.Web.Generated.MLClient.Models.AnomalyDetectRequest body, Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
@@ -57,15 +54,12 @@ namespace ClimaSense.Web.Generated.MLClient.Api.Anomalies.Detect
             var requestInfo = ToPostRequestInformation(body, requestConfiguration);
             var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
             {
-                { "501", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
-                { "502", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
                 { "503", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
-                { "504", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
             };
             return await RequestAdapter.SendAsync<global::ClimaSense.Web.Generated.MLClient.Models.AnomalyDetectResponse>(requestInfo, global::ClimaSense.Web.Generated.MLClient.Models.AnomalyDetectResponse.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
-        /// Invokes the appropriate detector(s) against the cursor window.- `sensor_failure` / `residual_outlier` — INSERT … WHERE NOT EXISTS  over a 24-hour lookback. Cheap; default timeout 30 s.- `regime_shift` — `sp_getapplock`-guarded scan-and-replace over  a 90-day lookback. Longer; default timeout **60 s**.Idempotent per `UNIQUE (AnomalyType, ReadingTime)`.
+        /// Invokes the appropriate detector(s) against the cursor window.- `sensor_failure` / `residual_outlier` — INSERT … WHERE NOT EXISTS  over a 24-hour lookback. Cheap; default timeout 30 s.- `regime_shift` — `sp_getapplock`-guarded scan-and-replace over  a 90-day lookback. Longer; default timeout **60 s**.Idempotent per `UNIQUE (AnomalyType, ReadingTime)`. Slice 8promotes this handler from the slice-2 501-stub to the realthree-detector pipeline.
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
         /// <param name="body">The request body</param>
