@@ -13,6 +13,10 @@ import os
 os.environ.setdefault("CLIMASENSE_HEALTH_SKIP_DB", "1")  # avoid DB roundtrip
 os.environ.setdefault("CLIMASENSE_SKIP_BOOTSTRAP", "1")  # slice 3: skip bcp in tests
 os.environ.setdefault("CLIMASENSE_CONTRACT_SKIP_VALIDATION", "1")  # contract tested elsewhere
+os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_FIT", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_SCHEDULER", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_COMFORT_SCHEDULER", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_ANOMALY_SCHEDULER", "1")
 
 from fastapi.testclient import TestClient  # noqa: E402
 

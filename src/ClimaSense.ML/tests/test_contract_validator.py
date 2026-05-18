@@ -29,6 +29,13 @@ os.environ.setdefault("CLIMASENSE_HEALTH_SKIP_DB", "1")
 # from the test bodies so we can both assert it passes and feed it a
 # mutated YAML for the negative path.
 os.environ.setdefault("CLIMASENSE_CONTRACT_SKIP_VALIDATION", "1")
+# Slice 3/5/7/8: skip the various startup tasks so the test fixture
+# doesn't try to bcp-load, fit, or schedule against a missing DB.
+os.environ.setdefault("CLIMASENSE_SKIP_BOOTSTRAP", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_FIT", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_SCHEDULER", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_COMFORT_SCHEDULER", "1")
+os.environ.setdefault("CLIMASENSE_SKIP_ANOMALY_SCHEDULER", "1")
 
 from climasense_ml.contract_validator import (  # noqa: E402
     ContractMismatchError,

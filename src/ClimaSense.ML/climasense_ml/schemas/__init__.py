@@ -9,6 +9,7 @@ from .generated import (  # noqa: F401  (re-export surface for handlers)
     AnomalyDetectRequest,
     AnomalyDetectResponse,
     AnomalyRow,
+    AnomalyRunSummary,
     AnomalyType,
     ComfortRating,
     ComfortScoreResponse,

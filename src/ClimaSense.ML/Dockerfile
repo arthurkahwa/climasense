@@ -79,6 +79,7 @@ RUN uv venv /opt/venv \
         "scikit-learn>=1.5,<2" \
         "numpy>=1.26,<3" \
         "apscheduler>=3.10,<4" \
+        "ruptures>=1.1.9,<2" \
         "datamodel-code-generator>=0.26,<1"
 
 # Contract first — codegen reads from /app/contracts/openapi.yaml.

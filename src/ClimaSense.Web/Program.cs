@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using ClimaSense.Web.Anomalies;
 using ClimaSense.Web.Clock;
 using ClimaSense.Web.Comfort;
 using ClimaSense.Web.Cursor;
@@ -159,6 +160,23 @@ builder.Services.AddScoped<ComfortReadService>(sp =>
 {
     var fetcher = sp.GetRequiredService<SqlComfortFetcher>();
     return new ComfortReadService(fetcher.FetchAsync);
+});
+
+// ---------------------------------------------------------------------
+// Anomalies — slice 8. `AnomalyReadService` follows the same
+// delegate-seam pattern. Both reads go through
+// `dbo.fv_anomalies_at_cursor(@asOf)` so cursor-clipping is enforced
+// by the schema. `dbo.Anomalies` is populated by the ml-tier's
+// three-detector pipeline (SensorFailureRules + ResidualOutlierDetector
+// + ChangepointDetector); the read path bypasses the ml container.
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<SqlAnomalyFetcher>();
+builder.Services.AddScoped<AnomalyReadService>(sp =>
+{
+    var fetcher = sp.GetRequiredService<SqlAnomalyFetcher>();
+    return new AnomalyReadService(
+        fetcher.FetchLatestAsync,
+        fetcher.FetchRangeAsync);
 });
 
 // ---------------------------------------------------------------------
@@ -363,6 +381,97 @@ app.MapGet("/api/comfort/current", async (
             statusCode: StatusCodes.Status404NotFound);
     }
     return Results.Json(current, statusCode: StatusCodes.Status200OK);
+});
+
+// ---------------------------------------------------------------------
+// Anomalies — slice 8. Read-path bypass: web tier reads
+// `dbo.Anomalies` through `dbo.fv_anomalies_at_cursor(@asOf)` directly;
+// the ml container is NOT involved. The table is populated by the
+// ml-tier three-detector pipeline (nightly scheduler + on-demand POST).
+//   * /latest — most recent anomaly visible at the cursor; 404 when
+//     none exist.
+//   * /api/anomalies — range query with optional ?type= filter.
+// ---------------------------------------------------------------------
+app.MapGet("/api/anomalies/latest", async (
+    HttpContext ctx,
+    AnomalyReadService anomalies,
+    CursorSnapshot cursor,
+    CancellationToken cancellationToken) =>
+{
+    var latest = await anomalies.GetLatestAsync(cursor, cancellationToken)
+        .ConfigureAwait(false);
+    if (latest is null)
+    {
+        return Results.Json(
+            new
+            {
+                error = "no_anomaly_yet",
+                message =
+                    "Anomalies is empty at the cursor (the nightly " +
+                    "scheduler may not have fired yet). Trigger the " +
+                    "on-demand POST /api/ml/run/anomalies to backfill.",
+                requestId = RequestIdMiddleware.Get(ctx),
+            },
+            statusCode: StatusCodes.Status404NotFound);
+    }
+    return Results.Json(latest, statusCode: StatusCodes.Status200OK);
+});
+
+app.MapGet("/api/anomalies", async (
+    HttpContext ctx,
+    AnomalyReadService anomalies,
+    CursorSnapshot cursor,
+    string? start,
+    string? end,
+    string? type,
+    CancellationToken cancellationToken) =>
+{
+    DateTime? startUtc = null;
+    DateTime? endUtc = null;
+    if (!string.IsNullOrWhiteSpace(start))
+    {
+        if (!TryParseUtc(start, out var parsed))
+        {
+            return BadRequest(ctx,
+                error: "invalid_start",
+                message: "`start` must be an ISO 8601 UTC timestamp.");
+        }
+        startUtc = parsed;
+    }
+    if (!string.IsNullOrWhiteSpace(end))
+    {
+        if (!TryParseUtc(end, out var parsed))
+        {
+            return BadRequest(ctx,
+                error: "invalid_end",
+                message: "`end` must be an ISO 8601 UTC timestamp.");
+        }
+        endUtc = parsed;
+    }
+    if (!string.IsNullOrWhiteSpace(type)
+        && type is not "sensor_failure"
+            and not "regime_shift"
+            and not "residual_outlier")
+    {
+        return BadRequest(ctx,
+            error: "invalid_type",
+            message:
+                "`type` must be one of: sensor_failure, regime_shift, residual_outlier.");
+    }
+
+    try
+    {
+        var response = await anomalies
+            .GetRangeAsync(cursor, startUtc, endUtc, type, cancellationToken)
+            .ConfigureAwait(false);
+        return Results.Json(response, statusCode: StatusCodes.Status200OK);
+    }
+    catch (ArgumentException ex)
+    {
+        return BadRequest(ctx,
+            error: "invalid_range",
+            message: ex.Message);
+    }
 });
 
 // Liveness — process up.

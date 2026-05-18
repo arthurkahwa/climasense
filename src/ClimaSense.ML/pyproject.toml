@@ -1,7 +1,7 @@
 [project]
 name = "climasense-ml"
-version = "0.5.0"
-description = "ClimaSense ML tier (FastAPI). Slice 5: lag-LR boot-fit forecaster + emission."
+version = "0.8.0"
+description = "ClimaSense ML tier (FastAPI). Slice 8: three-detector anomaly pipeline."
 readme = "README.md"
 requires-python = ">=3.13"
 license = { text = "MIT" }
@@ -27,6 +27,12 @@ dependencies = [
     "numpy>=1.26,<3",
     # Slice 5: APScheduler drives the β-prime emission gate.
     "apscheduler>=3.10,<4",
+    # Slice 8: ruptures provides the PELT changepoint detector used by
+    # `ChangepointDetector`. Pinned to the 1.1.x band — the
+    # `Pelt(model='rbf')` API surface is stable across the band, and
+    # the wheel ships arm64+linux64 binaries so the FastAPI Dockerfile
+    # installs without a C-extension build.
+    "ruptures>=1.1.9,<2",
 ]
 
 [project.optional-dependencies]

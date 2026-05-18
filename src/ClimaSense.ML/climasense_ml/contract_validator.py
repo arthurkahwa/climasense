@@ -126,6 +126,13 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # dashboard's comfort card reads through the .NET tier
         # directly.
         "CurrentComfortResponse",
+        # Slice 8: only referenced by /api/anomalies/latest and
+        # /api/anomalies (both web-tier-only). The ml tier *populates*
+        # dbo.Anomalies via the three-detector pipeline, but the
+        # dashboard's "Last anomaly" card and the range/type-filter
+        # read both bypass the ml container.
+        "LatestAnomalyResponse",
+        "AnomaliesResponse",
     }
     # Paths declared in the contract for cross-tier audit purposes but
     # NOT served by the FastAPI ml tier (they live on the .NET web tier).
@@ -158,6 +165,12 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # tier. The dashboard's comfort card needs this read-path
         # bypass to survive an ml outage.
         "/api/comfort/current",
+        # Slice 8: /api/anomalies/latest + /api/anomalies are .NET-tier
+        # reads of the `dbo.fv_anomalies_at_cursor` TVF — both bypass
+        # the ml tier. The dashboard's "Last anomaly" card needs this
+        # so an ml outage doesn't blank the card.
+        "/api/anomalies/latest",
+        "/api/anomalies",
     }
 
     def _strip(node: Any) -> Any:
