@@ -34,16 +34,14 @@ namespace ClimaSense.Web.Generated.MLClient.Api.Profiles.Analyze
         {
         }
         /// <summary>
-        /// Recomputes `DayProfiles` rows over `[start, end]` using theSQL CASE classifier baked into `init-db.sql`. Idempotent — thescan-and-replace transaction yields stable rows across reruns.
+        /// Recomputes `dbo.DayProfiles` rows over `[startDate, endDate]`using the empirical SQL CASE classifier`dbo.fn_classify_pattern` baked into `init-db.sql §4` (p90 ofMaxAbsZscore, p25/p75 of MeanResidual derived by`scripts/derive_pattern_thresholds.py` over the full`sensor_data.csv` training window). Idempotent on`[startDate, endDate]` — re-running yields identical rows(compute is deterministic; MERGE keyed on Date; Patternlabels are SQL-side and deterministic).The compute walks the full hourly history (cohort μ/σ benefitfrom maximum information) but only the requested `[startDate,endDate]` rows are MERGEd and returned.
         /// </summary>
         /// <returns>A <see cref="global::ClimaSense.Web.Generated.MLClient.Models.ProfilesAnalyzeResponse"/></returns>
         /// <param name="body">The request body</param>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
-        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 501 status code</exception>
-        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 502 status code</exception>
+        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 400 status code</exception>
         /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 503 status code</exception>
-        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 504 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public async Task<global::ClimaSense.Web.Generated.MLClient.Models.ProfilesAnalyzeResponse?> PostAsync(global::ClimaSense.Web.Generated.MLClient.Models.ProfilesAnalyzeRequest body, Action<RequestConfiguration<DefaultQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
@@ -57,15 +55,13 @@ namespace ClimaSense.Web.Generated.MLClient.Api.Profiles.Analyze
             var requestInfo = ToPostRequestInformation(body, requestConfiguration);
             var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
             {
-                { "501", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
-                { "502", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
+                { "400", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
                 { "503", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
-                { "504", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
             };
             return await RequestAdapter.SendAsync<global::ClimaSense.Web.Generated.MLClient.Models.ProfilesAnalyzeResponse>(requestInfo, global::ClimaSense.Web.Generated.MLClient.Models.ProfilesAnalyzeResponse.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
-        /// Recomputes `DayProfiles` rows over `[start, end]` using theSQL CASE classifier baked into `init-db.sql`. Idempotent — thescan-and-replace transaction yields stable rows across reruns.
+        /// Recomputes `dbo.DayProfiles` rows over `[startDate, endDate]`using the empirical SQL CASE classifier`dbo.fn_classify_pattern` baked into `init-db.sql §4` (p90 ofMaxAbsZscore, p25/p75 of MeanResidual derived by`scripts/derive_pattern_thresholds.py` over the full`sensor_data.csv` training window). Idempotent on`[startDate, endDate]` — re-running yields identical rows(compute is deterministic; MERGE keyed on Date; Patternlabels are SQL-side and deterministic).The compute walks the full hourly history (cohort μ/σ benefitfrom maximum information) but only the requested `[startDate,endDate]` rows are MERGEd and returned.
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
         /// <param name="body">The request body</param>

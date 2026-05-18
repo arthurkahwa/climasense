@@ -22,6 +22,7 @@ from .generated import (  # noqa: F401  (re-export surface for handlers)
     LatestReading,
     LeaderboardResponse,
     LeaderboardRow,
+    Pattern,
     ProblemDetails,
     ProfilesAnalyzeRequest,
     ProfilesAnalyzeResponse,

@@ -71,6 +71,8 @@ from .ingestion import BcpUnavailableError, IngestionService
 from .leaderboard import LeaderboardSeeder, SeedResult
 from .logging_setup import configure as configure_logging
 from .logging_setup import reset_request_id, set_request_id
+from .profile_emitter import ProfileEmitter
+from .profile_router import build_router as build_profile_router
 from .schemas import HealthStatus, HealthStatusEnum
 from .stubs import router as stubs_router
 
@@ -700,6 +702,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             anomaly_sched.shutdown(wait=False)
         except Exception:  # noqa: BLE001
             log.exception("Anomaly scheduler: shutdown raised")
+    profile_sched = getattr(app.state, "profile_scheduler", None)
+    if profile_sched is not None:
+        try:
+            profile_sched.shutdown(wait=False)
+        except Exception:  # noqa: BLE001
+            log.exception("Profile scheduler: shutdown raised")
 
 
 async def _await_bootstrap_then_fit(app: FastAPI) -> None:
@@ -811,11 +819,34 @@ async def _await_bootstrap_then_fit(app: FastAPI) -> None:
         log.info(
             "Anomaly scheduler: SKIPPED (CLIMASENSE_SKIP_ANOMALY_SCHEDULER)"
         )
+    else:
+        try:
+            _register_anomaly_scheduler(app)
+        except Exception:  # noqa: BLE001
+            log.exception("Anomaly scheduler: registration failed")
+
+    # ----------------------------------------------------------------
+    # Profile scheduler (slice 9). Nightly cron at 03:00 UTC (one
+    # hour after the anomaly job at 02:00 UTC) — recomputes the last
+    # `NIGHTLY_LOOKBACK_DAYS` cursor-days. Idempotent on rerun. Does
+    # NOT depend on the forecaster boot-fit (the profile computer
+    # has its own internal lag-LR fit; the production forecaster is
+    # not consulted) — but we register it after the boot-fit anyway
+    # so the lifespan order matches "data is populated" → "compute
+    # on top of it".
+    # ----------------------------------------------------------------
+    skip_profiles = os.environ.get(
+        "CLIMASENSE_SKIP_PROFILE_SCHEDULER", ""
+    ).lower() in ("1", "true", "yes")
+    if skip_profiles:
+        log.info(
+            "Profile scheduler: SKIPPED (CLIMASENSE_SKIP_PROFILE_SCHEDULER)"
+        )
         return
     try:
-        _register_anomaly_scheduler(app)
+        _register_profile_scheduler(app)
     except Exception:  # noqa: BLE001
-        log.exception("Anomaly scheduler: registration failed")
+        log.exception("Profile scheduler: registration failed")
 
 
 def _register_forecast_scheduler(app: FastAPI) -> None:
@@ -974,12 +1005,50 @@ def _register_anomaly_scheduler(app: FastAPI) -> None:
     log.info("Anomaly scheduler: started (cron daily at 02:00 UTC)")
 
 
+def _register_profile_scheduler(app: FastAPI) -> None:
+    """Register the nightly APScheduler `cron` job for `DayProfiles`.
+
+    Fires once per wall-day at 03:00 UTC (one hour after the anomaly
+    cron). Each tick recomputes the last `NIGHTLY_LOOKBACK_DAYS`
+    cursor-days via `ProfileEmitter.tick`. Idempotent on rerun
+    (compute is deterministic + MERGE is keyed on Date).
+
+    The job is also re-callable on demand via
+    `POST /api/profiles/analyze` (handled by `profile_router`); that
+    path drives the same `recompute_range` body with the request's
+    explicit `[startDate, endDate]`.
+    """
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    log = logging.getLogger("climasense_ml.scheduler")
+
+    emitter = ProfileEmitter(
+        engine=get_engine(),
+        clock_provider=lambda: CursorSnapshot.from_clock(_clock),
+    )
+
+    scheduler = BackgroundScheduler(daemon=True, timezone="UTC")
+    scheduler.add_job(
+        emitter.tick,
+        trigger="cron",
+        hour=3,
+        minute=0,
+        id="profiles-nightly",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    app.state.profile_scheduler = scheduler
+    app.state.profile_emitter = emitter
+    log.info("Profile scheduler: started (cron daily at 03:00 UTC)")
+
+
 # ---------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------
 app = FastAPI(
     title="ClimaSense.ML",
-    version="0.8.0-slice-8",
+    version="0.9.0-slice-9",
     lifespan=lifespan,
 )
 app.add_middleware(CursorScopeMiddleware)
@@ -1018,9 +1087,23 @@ app.include_router(
     )
 )
 
-# Stub routes for the still-pending contract surface (profiles).
+# Slice 9: real /api/profiles/analyze handler (calendar-conditioned
+# DayProfiles recompute + MERGE). Registered BEFORE the stub router
+# so the stub router no longer carries profiles. As of slice 9 the
+# stub router is empty — every contract path that the ml tier owns
+# has a real handler.
+app.include_router(
+    build_profile_router(
+        get_engine=get_engine,
+        get_cursor=get_cursor,
+    )
+)
+
+# Stub routes for any future not-yet-implemented contract surface.
 # Slice 5 dropped /api/forecast (now real) from this router; slice 7
-# dropped /api/comfort/score; slice 8 dropped /api/anomalies/detect.
+# dropped /api/comfort/score; slice 8 dropped /api/anomalies/detect;
+# slice 9 dropped /api/profiles/analyze. The router is retained for
+# the next slice's contract-validator discipline.
 app.include_router(stubs_router)
 
 
