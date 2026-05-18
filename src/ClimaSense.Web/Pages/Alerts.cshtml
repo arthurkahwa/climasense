@@ -1,0 +1,413 @@
+@page
+@model ClimaSense.Web.Pages.AlertsModel
+@{
+    Layout = null;
+}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ClimaSense — alerts</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            background: #0d1117;
+            color: #c9d1d9;
+            margin: 0;
+            padding: 2rem;
+            line-height: 1.5;
+        }
+        h1 {
+            color: #58a6ff;
+            font-weight: 500;
+            margin-top: 0;
+        }
+        code, pre {
+            background: #161b22;
+            border-radius: 6px;
+            padding: 0.15rem 0.4rem;
+            color: #d2a8ff;
+        }
+        nav { color: #8b949e; font-size: 0.9rem; margin-bottom: 0.5rem; }
+        nav a { color: #58a6ff; }
+        .panel {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 1rem 1.25rem;
+            margin: 1rem 0;
+        }
+        table.alerts {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }
+        table.alerts th,
+        table.alerts td {
+            text-align: left;
+            padding: 0.5rem 0.6rem;
+            border-bottom: 1px solid #30363d;
+        }
+        table.alerts thead th {
+            color: #8b949e;
+            font-weight: 500;
+            font-size: 0.78rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            border-bottom: 1px solid #30363d;
+        }
+        table.alerts tbody tr.new-row {
+            animation: pop 1.2s ease-out;
+        }
+        @@keyframes pop {
+            from { background-color: rgba(86, 211, 100, 0.22); }
+            to   { background-color: transparent; }
+        }
+        .empty-state {
+            color: #8b949e;
+            font-style: italic;
+            padding: 0.5rem 0;
+        }
+        .rule-pill {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 999px;
+            background: rgba(121, 192, 255, 0.15);
+            color: #79c0ff;
+            border: 1px solid rgba(121, 192, 255, 0.35);
+            font-size: 0.78rem;
+            font-weight: 600;
+        }
+        .meta-row {
+            color: #8b949e;
+            font-size: 0.85rem;
+            margin-top: 0.5rem;
+        }
+        /* Toast notification — top-right; shared CSS class used by
+           Index.cshtml's toast handler too. Defined here so the Alerts
+           page renders correctly without depending on Index's styles. */
+        #toast-stack {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            z-index: 9999;
+            max-width: 24rem;
+        }
+        .toast {
+            background: #161b22;
+            border: 1px solid #f85149;
+            border-radius: 8px;
+            padding: 0.75rem 1rem;
+            color: #f0f6fc;
+            font-size: 0.88rem;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+            animation: slidein 0.25s ease-out;
+        }
+        .toast .toast-title {
+            color: #f85149;
+            font-weight: 600;
+            margin-bottom: 0.25rem;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .toast .toast-rule {
+            color: #c9d1d9;
+            font-weight: 500;
+            margin-bottom: 0.15rem;
+        }
+        .toast .toast-meta {
+            color: #8b949e;
+            font-size: 0.78rem;
+        }
+        @@keyframes slidein {
+            from { transform: translateX(110%); opacity: 0; }
+            to   { transform: translateX(0);   opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <h1>ClimaSense — alerts</h1>
+
+    <nav>
+        <a href="/">Dashboard</a> ·
+        <a href="/Explorer">Historical Explorer</a> ·
+        <a href="/Analysis">Model Leaderboard</a> ·
+        Alerts
+    </nav>
+
+    <p>
+        Closed-breach intervals detected by the threshold engine
+        (<code>ThresholdAlertScanner</code>). The engine runs every
+        wall-minute, scans the last 24 h of <code>SensorReadings</code>
+        per enabled rule with a gaps-and-islands query, and writes one
+        <code>dbo.Alerts</code> row per newly-closed breach interval
+        (idempotent via <code>UNIQUE(RuleId, BreachStart)</code>).
+        Browser receives live notifications via the
+        <code>breach-detected</code> SSE event.
+    </p>
+
+    <section class="panel">
+        <strong>Rules in force</strong>
+        <div class="meta-row" id="rules-meta">Loading from
+            <code>/api/alerts/rules</code>&hellip;</div>
+        <div id="rules-list" style="margin-top:0.5rem;"></div>
+    </section>
+
+    <section class="panel">
+        <strong>Alert history</strong>
+        <div class="meta-row" id="alerts-meta">Loading from
+            <code>/api/alerts</code>&hellip;</div>
+        <table class="alerts" id="alerts-table" style="margin-top:0.75rem;">
+            <thead>
+                <tr>
+                    <th>Fired (replay clock)</th>
+                    <th>Rule</th>
+                    <th>Breach window (UTC)</th>
+                    <th>Peak</th>
+                </tr>
+            </thead>
+            <tbody id="alerts-body"></tbody>
+        </table>
+        <div id="alerts-empty" class="empty-state" style="display:none;">
+            No alerts have fired yet. As the replay cursor advances over
+            historical breaches the table populates here in real time.
+        </div>
+    </section>
+
+    <div id="toast-stack" aria-live="polite" aria-atomic="true"></div>
+
+    <script>
+        // ----------------------------------------------------------------
+        // Slice 11: shared helpers.
+        // ----------------------------------------------------------------
+        function formatTimestamp(iso) {
+            try {
+                var d = new Date(iso);
+                return d.toLocaleString(undefined, {
+                    year: 'numeric', month: 'short', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit',
+                    timeZoneName: 'short'
+                });
+            } catch (e) {
+                return iso;
+            }
+        }
+
+        function formatBreachWindow(startIso, endIso) {
+            try {
+                var s = new Date(startIso);
+                var e = new Date(endIso);
+                var dur = Math.round((e - s) / 60000);
+                var opts = {
+                    month: 'short', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit'
+                };
+                return s.toLocaleString(undefined, opts) + ' → ' +
+                       e.toLocaleString(undefined, opts) +
+                       ' (' + dur + ' min)';
+            } catch (e2) {
+                return startIso + ' → ' + endIso;
+            }
+        }
+
+        // textContent-only renderers — the server's strings (rule names,
+        // summaries) come from operator-curated rows but the dashboard
+        // refuses to use innerHTML on them as a defence-in-depth posture.
+        function appendAlertRow(tbody, row, isNew) {
+            var tr = document.createElement('tr');
+            if (isNew) tr.className = 'new-row';
+
+            var tdFire = document.createElement('td');
+            tdFire.textContent = formatTimestamp(row.replayClockAtFire);
+            tr.appendChild(tdFire);
+
+            var tdRule = document.createElement('td');
+            var pill = document.createElement('span');
+            pill.className = 'rule-pill';
+            pill.textContent = row.ruleName;
+            tdRule.appendChild(pill);
+            tdRule.appendChild(document.createTextNode('  '));
+            tdRule.appendChild(document.createTextNode(row.ruleSummary));
+            tr.appendChild(tdRule);
+
+            var tdWindow = document.createElement('td');
+            tdWindow.textContent = formatBreachWindow(
+                row.breachStart, row.breachEnd);
+            tr.appendChild(tdWindow);
+
+            var tdPeak = document.createElement('td');
+            tdPeak.textContent = Number(row.peakValue).toFixed(2);
+            tr.appendChild(tdPeak);
+
+            tbody.appendChild(tr);
+        }
+
+        function prependAlertRow(tbody, row) {
+            var tr = document.createElement('tr');
+            tr.className = 'new-row';
+
+            var tdFire = document.createElement('td');
+            tdFire.textContent = formatTimestamp(row.replayClockAtFire);
+            tr.appendChild(tdFire);
+
+            var tdRule = document.createElement('td');
+            var pill = document.createElement('span');
+            pill.className = 'rule-pill';
+            pill.textContent = row.ruleName;
+            tdRule.appendChild(pill);
+            tdRule.appendChild(document.createTextNode('  '));
+            tdRule.appendChild(document.createTextNode(row.ruleSummary));
+            tr.appendChild(tdRule);
+
+            var tdWindow = document.createElement('td');
+            tdWindow.textContent = formatBreachWindow(
+                row.breachStart, row.breachEnd);
+            tr.appendChild(tdWindow);
+
+            var tdPeak = document.createElement('td');
+            tdPeak.textContent = Number(row.peakValue).toFixed(2);
+            tr.appendChild(tdPeak);
+
+            if (tbody.firstChild) {
+                tbody.insertBefore(tr, tbody.firstChild);
+            } else {
+                tbody.appendChild(tr);
+            }
+        }
+
+        // ----------------------------------------------------------------
+        // Rules in force.
+        // ----------------------------------------------------------------
+        (function () {
+            var list = document.getElementById('rules-list');
+            var meta = document.getElementById('rules-meta');
+
+            fetch('/api/alerts/rules', { headers: { 'Accept': 'application/json' } })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (body) {
+                    var rules = (body && body.rules) || [];
+                    while (list.firstChild) list.removeChild(list.firstChild);
+                    if (rules.length === 0) {
+                        meta.textContent =
+                            'no enabled rules found in dbo.AlertRules';
+                        return;
+                    }
+                    meta.textContent =
+                        rules.length + ' enabled rule(s); evaluated every wall-minute';
+                    rules.forEach(function (rule) {
+                        var div = document.createElement('div');
+                        div.style.margin = '0.25rem 0';
+                        var pill = document.createElement('span');
+                        pill.className = 'rule-pill';
+                        pill.textContent = rule.name;
+                        div.appendChild(pill);
+                        div.appendChild(document.createTextNode('  '));
+                        var summary = document.createElement('code');
+                        summary.textContent = rule.summary;
+                        div.appendChild(summary);
+                        list.appendChild(div);
+                    });
+                })
+                .catch(function (err) {
+                    meta.textContent =
+                        '/api/alerts/rules failed: ' + (err.message || err);
+                });
+        })();
+
+        // ----------------------------------------------------------------
+        // Alert history.
+        // ----------------------------------------------------------------
+        var tbody = document.getElementById('alerts-body');
+        var meta = document.getElementById('alerts-meta');
+        var emptyEl = document.getElementById('alerts-empty');
+        var seenAlertIds = new Set();
+
+        fetch('/api/alerts?limit=200', { headers: { 'Accept': 'application/json' } })
+            .then(function (r) {
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                return r.json();
+            })
+            .then(function (body) {
+                var rows = (body && body.rows) || [];
+                while (tbody.firstChild) tbody.removeChild(tbody.firstChild);
+                if (rows.length === 0) {
+                    emptyEl.style.display = 'block';
+                    meta.textContent =
+                        '0 alerts at cursor (limit ' + body.limit + ')';
+                    return;
+                }
+                emptyEl.style.display = 'none';
+                meta.textContent =
+                    body.count + ' alerts at cursor (limit ' + body.limit + ')';
+                rows.forEach(function (row) {
+                    seenAlertIds.add(row.alertId);
+                    appendAlertRow(tbody, row, false);
+                });
+            })
+            .catch(function (err) {
+                meta.textContent =
+                    '/api/alerts failed: ' + (err.message || err);
+            });
+
+        // ----------------------------------------------------------------
+        // Slice 11 SSE — listen for `breach-detected` and (a) render a
+        // toast, (b) prepend a new row to the history table if its
+        // alertId hasn't already been rendered from the initial fetch.
+        // The slice-1 `server-tick` event is unused on this page.
+        // ----------------------------------------------------------------
+        (function () {
+            var es = new EventSource('/api/alerts/stream');
+            var toastStack = document.getElementById('toast-stack');
+
+            es.addEventListener('breach-detected', function (ev) {
+                var payload;
+                try { payload = JSON.parse(ev.data); }
+                catch (e) { return; }
+                if (!payload || payload.alertId == null) return;
+
+                // Toast.
+                var toast = document.createElement('div');
+                toast.className = 'toast';
+                var title = document.createElement('div');
+                title.className = 'toast-title';
+                title.textContent = 'Breach detected';
+                toast.appendChild(title);
+                var rule = document.createElement('div');
+                rule.className = 'toast-rule';
+                rule.textContent = payload.ruleName + ' — ' + payload.ruleSummary;
+                toast.appendChild(rule);
+                var line = document.createElement('div');
+                line.className = 'toast-meta';
+                line.textContent = 'fired at ' + formatTimestamp(payload.replayClockAtFire) +
+                    ' · peak ' + Number(payload.peakValue).toFixed(2);
+                toast.appendChild(line);
+                toastStack.appendChild(toast);
+                setTimeout(function () {
+                    if (toast.parentNode) toast.parentNode.removeChild(toast);
+                }, 8000);
+
+                // Prepend to the table — unless we've already shown it
+                // from the initial fetch (race window: the scanner could
+                // fire while the fetch is still in flight).
+                if (!seenAlertIds.has(payload.alertId)) {
+                    seenAlertIds.add(payload.alertId);
+                    emptyEl.style.display = 'none';
+                    prependAlertRow(tbody, payload);
+                }
+            });
+
+            window.addEventListener('beforeunload', function () {
+                try { es.close(); } catch (e) { /* ignore */ }
+            });
+        })();
+    </script>
+</body>
+</html>

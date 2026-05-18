@@ -23,6 +23,13 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- Slice 11: expose AlertStream's internal subscription Reader to
+         the unit-test assembly so ThresholdAlertScannerTests can drain
+         broadcast frames without spinning a real HTTP SSE client. -->
+    <InternalsVisibleTo Include="ClimaSense.Web.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Data.SqlClient" Version="6.0.1" />
 
     <!-- Kiota runtime packages — consumed by the generated client in

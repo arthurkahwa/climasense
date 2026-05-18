@@ -147,6 +147,18 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         "WorstCalendarCell",
         "ComfortTrendPoint",
         "ComfortBudgetResponse",
+        # Slice 11: only referenced by /api/alerts, /api/alerts/rules,
+        # and the SSE `breach-detected` event (all web-tier-only). The
+        # threshold engine (`ThresholdAlertScanner`) runs INSIDE the
+        # .NET web tier as a `BackgroundService`; the ml container is
+        # NOT involved in alert detection, delivery, or read.
+        "AlertMetric",
+        "AlertOperator",
+        "AlertRow",
+        "AlertHistoryResponse",
+        "AlertRuleRow",
+        "AlertRulesResponse",
+        "BreachDetectedPayload",
     }
     # Paths declared in the contract for cross-tier audit purposes but
     # NOT served by the FastAPI ml tier (they live on the .NET web tier).
@@ -198,6 +210,14 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # container is NOT involved — the dashboard panel survives an
         # ml outage.
         "/api/comfort/budget",
+        # Slice 11: /api/alerts + /api/alerts/rules are .NET-tier reads
+        # of `dbo.Alerts` (via `dbo.fv_alerts_at_cursor`) and
+        # `dbo.AlertRules`. The threshold engine itself runs INSIDE the
+        # .NET web tier as a `BackgroundService`
+        # (`ThresholdAlertScanner`) — per ADR-0007 + epic #2 the alert
+        # delivery path doesn't cross into the ml container at all.
+        "/api/alerts",
+        "/api/alerts/rules",
     }
 
     def _strip(node: Any) -> Any:
