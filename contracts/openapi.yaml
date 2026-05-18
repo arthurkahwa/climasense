@@ -1,4 +1,4 @@
-# ClimaSense — cross-tier wire format (Slice 10 surface).
+# ClimaSense — cross-tier wire format (Slice 11 surface).
 #
 # This file is the source of truth for the .NET ↔ Python contract.
 # Slice 2 introduced the ML-tier request/response surface (forecast /
@@ -51,6 +51,17 @@
 # and `COMFORT_BUDGET_WINDOW_DAYS`. The dashboard panel hydrates from
 # this single endpoint; the ml container is NOT involved. See
 # ADR-0006.
+# Slice 11 (#13) adds the threshold alert engine, Alert history page,
+# and `breach-detected` SSE event. Two new web-tier-only endpoints —
+# `GET /api/alerts` (history) and `GET /api/alerts/rules` (rules in
+# force) — back the page; a new `BackgroundService`
+# (`ThresholdAlertScanner`) inside the .NET web tier fires every
+# wall-minute, runs per-rule gaps-and-islands SQL over the last 24 h
+# of `dbo.SensorReadings`, and writes one `dbo.Alerts` row per
+# newly-closed breach interval (idempotent via UNIQUE(RuleId,
+# BreachStart)). Every insertion broadcasts a `breach-detected`
+# event on the slice-1 `AlertStream`. Rules are seeded in
+# `scripts/init-db.sql §5`; CRUD UI is deferred per ADR-0011.
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
 # JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
@@ -60,7 +71,7 @@
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.10.0-slice-10
+  version: 0.11.0-slice-11
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
@@ -112,6 +123,14 @@ tags:
       at FastAPI startup by the boot-fitted `LagLinearForecaster` on
       the same 14-day held-out window. Served by the web tier directly
       from SQL — the read path bypasses the ml tier.
+  - name: alerts
+    description: |
+      Threshold alert rules and history. The threshold engine runs as a
+      `BackgroundService` (`ThresholdAlertScanner`) inside the .NET web
+      tier — wall-minute scan over `dbo.SensorReadings`, gaps-and-islands
+      SQL per rule, closure-only delivery, idempotent re-detection via
+      `UNIQUE(RuleId, BreachStart)`. AlertRules CRUD UI is deferred
+      (rules seeded in `scripts/init-db.sql`).
   - name: sse
     description: Server-Sent Events channel (web tier only).
 
@@ -810,6 +829,76 @@ paths:
                 $ref: "#/components/schemas/LeaderboardResponse"
 
   # -------------------------------------------------------------------
+  # Alerts — slice 11. Two web-tier-only read endpoints back the Alert
+  # history page and the toast handler. The threshold engine itself
+  # runs inside the web tier as a `BackgroundService`
+  # (`ThresholdAlertScanner`) — see ADR-0007 + epic #2's "Alert delivery
+  # path" section.
+  # -------------------------------------------------------------------
+  /api/alerts:
+    get:
+      summary: Alert history (most-recent N) — cursor-clipped.
+      description: |
+        Returns the most-recent alerts visible at the cursor, ordered
+        by `ReplayClockAtFire DESC, AlertId DESC`. Reads the
+        `dbo.fv_alerts_at_cursor(@asOf)` TVF (init-db.sql §3.5) joined
+        against `dbo.AlertRules` for the human-readable rule label and
+        the `Metric Operator Threshold for DurationMinutes` summary.
+
+        `limit` is clamped to `[1, 200]`; default 50. Returns 200 with
+        an empty `rows` array when no alerts have fired yet.
+
+        Read-path bypass — the ml container is NOT involved.
+      operationId: getAlerts
+      tags: [alerts]
+      parameters:
+        - in: query
+          name: limit
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+          description: Maximum number of rows to return (1..200).
+      responses:
+        "200":
+          description: Alert history envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertHistoryResponse"
+        "400":
+          description: Invalid `limit` (out of range or unparseable).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  /api/alerts/rules:
+    get:
+      summary: List enabled alert rules.
+      description: |
+        Returns every enabled row in `dbo.AlertRules` ordered by
+        `RuleId`. The dashboard uses this both as a "rules in force"
+        inventory and as the lookup for the `breach-detected` toast
+        when the SSE payload's `ruleId` arrives.
+
+        CRUD UI is deferred (per ADR-0011 + epic #2 "Alerts and SSE");
+        rules are seeded in `scripts/init-db.sql §5`.
+
+        Read-path bypass — the ml container is NOT involved.
+      operationId: getAlertRules
+      tags: [alerts]
+      responses:
+        "200":
+          description: All enabled rules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertRulesResponse"
+
+  # -------------------------------------------------------------------
   # SSE — registered on the web tier; documented here so the contract
   # captures the complete cross-tier wire surface.
   # -------------------------------------------------------------------
@@ -817,12 +906,20 @@ paths:
     get:
       summary: Server-Sent Events stream
       description: |
-        SSE channel registered at slice 1 with one event type:
-          - `server-tick` — heartbeat every ~15 s.
-        Slice 11 adds `breach-detected`; slice 13 adds `clock-changed`.
+        SSE channel registered at slice 1 with two event types after
+        slice 11:
+          - `server-tick`       — heartbeat every ~15 s (slice 1).
+          - `breach-detected`   — one per newly-inserted `dbo.Alerts`
+            row (slice 11). Payload: `BreachDetectedPayload`. Fires
+            from the `ThresholdAlertScanner` BackgroundService at
+            wall-minute cadence.
+        Slice 13 will add `clock-changed`.
+
         Subscribers are tracked in `AlertStream` (.NET singleton). Closing
         the connection unsubscribes cleanly via `HttpContext.RequestAborted`.
-        `Last-Event-ID` reconnection is honoured.
+        `Last-Event-ID` reconnection is honoured; `breach-detected` events
+        receive monotonically-increasing event ids on the same id space
+        as `server-tick` so a reconnecting client never re-receives them.
       operationId: getAlertsStream
       tags: [sse]
       responses:
@@ -834,7 +931,7 @@ paths:
                 type: string
                 description: |
                   Each event is `event: <type>\ndata: <json>\nid: <number>\n\n`.
-                  Slice 1 emits only `event: server-tick`.
+                  See `BreachDetectedPayload` for the slice-11 event body.
 
 components:
   schemas:
@@ -1665,3 +1762,197 @@ components:
             `LeaderboardSeeder` completes.
           items:
             $ref: "#/components/schemas/LeaderboardRow"
+
+    # -----------------------------------------------------------------
+    # Alerts — slice 11. The threshold engine writes rows into
+    # `dbo.Alerts`; the web tier reads them via the cursor-clipped TVF
+    # `dbo.fv_alerts_at_cursor(@asOf)`. Rules live in `dbo.AlertRules`
+    # (seeded in init-db.sql §5; CRUD UI deferred per ADR-0011).
+    # -----------------------------------------------------------------
+    AlertMetric:
+      type: string
+      enum: [T, RH]
+      description: |
+        Metric column the rule predicate compares against.
+          * `T`  → `dbo.SensorReadings.Temperature` (°C).
+          * `RH` → `dbo.SensorReadings.Humidity`   (% relative).
+
+    AlertOperator:
+      type: string
+      enum: [">", "<"]
+      description: |
+        Comparison operator for the rule predicate. The current set is
+        deliberately small (`>` and `<`) — the threshold engine's
+        gaps-and-islands SQL renders this directly into the
+        `CASE WHEN <col> <op> @threshold THEN 1 ELSE 0 END` predicate.
+
+    AlertRow:
+      type: object
+      additionalProperties: false
+      required:
+        - alertId
+        - ruleId
+        - ruleName
+        - ruleSummary
+        - breachStart
+        - breachEnd
+        - peakValue
+        - replayClockAtFire
+      properties:
+        alertId:
+          type: integer
+          format: int64
+          description: Identity column from `dbo.Alerts`.
+        ruleId:
+          type: integer
+          description: Identity column from `dbo.AlertRules`.
+        ruleName:
+          type: string
+          description: Human-curated name from `dbo.AlertRules.Name`.
+        ruleSummary:
+          type: string
+          description: |
+            One-line, human-readable rendering of the rule's predicate,
+            e.g. `"T > 26 °C for 30 min"`. Computed on the server so
+            the dashboard never has to second-hop for it.
+        breachStart:
+          type: string
+          format: date-time
+          description: Earliest in-breach reading time (UTC).
+        breachEnd:
+          type: string
+          format: date-time
+          description: Latest in-breach reading time (UTC).
+        peakValue:
+          type: number
+          format: double
+          description: |
+            Extreme value of the metric inside the breach window
+            (`MAX` for `>` rules, `MIN` for `<` rules).
+        replayClockAtFire:
+          type: string
+          format: date-time
+          description: |
+            Cursor value at the moment the scanner committed the row —
+            makes the clock-source explicit on every Alert.
+
+    AlertHistoryResponse:
+      type: object
+      additionalProperties: false
+      required: [limit, count, rows]
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 200
+          description: |
+            Effective row cap the server applied (clamped to
+            `[1, 200]`; default 50). Echoes the query parameter when
+            provided.
+        count:
+          type: integer
+          minimum: 0
+          description: Number of rows in this response page.
+        rows:
+          type: array
+          description: |
+            Up to `limit` most-recent alerts visible at the cursor,
+            ordered by `replayClockAtFire DESC, alertId DESC`.
+          items:
+            $ref: "#/components/schemas/AlertRow"
+
+    AlertRuleRow:
+      type: object
+      additionalProperties: false
+      required:
+        - ruleId
+        - name
+        - metric
+        - operator
+        - threshold
+        - durationMinutes
+        - enabled
+        - summary
+      properties:
+        ruleId:
+          type: integer
+          description: Identity column from `dbo.AlertRules`.
+        name:
+          type: string
+          description: Human-curated name.
+        metric:
+          $ref: "#/components/schemas/AlertMetric"
+        operator:
+          $ref: "#/components/schemas/AlertOperator"
+        threshold:
+          type: number
+          format: double
+          description: Comparison value (units match `metric`).
+        durationMinutes:
+          type: integer
+          minimum: 1
+          description: |
+            Minimum sustained duration before the breach interval
+            counts as closed (and is therefore eligible for an Alert
+            row).
+        enabled:
+          type: boolean
+          description: |
+            `true` when the scanner evaluates the rule each tick.
+            `GET /api/alerts/rules` returns only enabled rows.
+        summary:
+          type: string
+          description: |
+            One-line, human-readable rendering of the rule's predicate
+            (e.g. `"T > 26 °C for 30 min"`).
+
+    AlertRulesResponse:
+      type: object
+      additionalProperties: false
+      required: [rules]
+      properties:
+        rules:
+          type: array
+          description: All enabled rules, ordered by `ruleId`.
+          items:
+            $ref: "#/components/schemas/AlertRuleRow"
+
+    BreachDetectedPayload:
+      type: object
+      additionalProperties: false
+      description: |
+        JSON payload of the SSE `event: breach-detected` frame. Emitted
+        from `ThresholdAlertScanner.TickOnceAsync` once per newly-inserted
+        `dbo.Alerts` row. Idempotent on `UNIQUE(RuleId, BreachStart)` —
+        re-detections produce zero events.
+      required:
+        - alertId
+        - ruleId
+        - ruleName
+        - ruleSummary
+        - breachStart
+        - breachEnd
+        - peakValue
+        - replayClockAtFire
+      properties:
+        alertId:
+          type: integer
+          format: int64
+        ruleId:
+          type: integer
+        ruleName:
+          type: string
+        ruleSummary:
+          type: string
+        breachStart:
+          type: string
+          format: date-time
+        breachEnd:
+          type: string
+          format: date-time
+        peakValue:
+          type: number
+          format: double
+        replayClockAtFire:
+          type: string
+          format: date-time

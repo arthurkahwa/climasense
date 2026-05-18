@@ -88,6 +88,12 @@ _REAL_ENDPOINTS = {
     # three deterministic SQL aggregations over `dbo.ComfortScores` +
     # `dbo.DayProfiles` — bypasses the ml tier (per ADR-0006).
     ("/api/comfort/budget", "get"),
+    # Slice 11: /api/alerts + /api/alerts/rules are .NET web-tier reads
+    # of `dbo.Alerts` and `dbo.AlertRules`. The threshold engine
+    # (`ThresholdAlertScanner` BackgroundService) also lives on the
+    # .NET tier — the ml container is NOT involved per ADR-0007.
+    ("/api/alerts", "get"),
+    ("/api/alerts/rules", "get"),
 }
 
 

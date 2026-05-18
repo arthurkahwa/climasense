@@ -33,7 +33,7 @@ namespace ClimaSense.Web.Generated.MLClient.Api.Alerts.StreamNamespace
         {
         }
         /// <summary>
-        /// SSE channel registered at slice 1 with one event type:  - `server-tick` — heartbeat every ~15 s.Slice 11 adds `breach-detected`; slice 13 adds `clock-changed`.Subscribers are tracked in `AlertStream` (.NET singleton). Closingthe connection unsubscribes cleanly via `HttpContext.RequestAborted`.`Last-Event-ID` reconnection is honoured.
+        /// SSE channel registered at slice 1 with two event types afterslice 11:  - `server-tick`       — heartbeat every ~15 s (slice 1).  - `breach-detected`   — one per newly-inserted `dbo.Alerts`    row (slice 11). Payload: `BreachDetectedPayload`. Fires    from the `ThresholdAlertScanner` BackgroundService at    wall-minute cadence.Slice 13 will add `clock-changed`.Subscribers are tracked in `AlertStream` (.NET singleton). Closingthe connection unsubscribes cleanly via `HttpContext.RequestAborted`.`Last-Event-ID` reconnection is honoured; `breach-detected` eventsreceive monotonically-increasing event ids on the same id spaceas `server-tick` so a reconnecting client never re-receives them.
         /// </summary>
         /// <returns>A <see cref="Stream"/></returns>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
@@ -51,7 +51,7 @@ namespace ClimaSense.Web.Generated.MLClient.Api.Alerts.StreamNamespace
             return await RequestAdapter.SendPrimitiveAsync<Stream>(requestInfo, default, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
-        /// SSE channel registered at slice 1 with one event type:  - `server-tick` — heartbeat every ~15 s.Slice 11 adds `breach-detected`; slice 13 adds `clock-changed`.Subscribers are tracked in `AlertStream` (.NET singleton). Closingthe connection unsubscribes cleanly via `HttpContext.RequestAborted`.`Last-Event-ID` reconnection is honoured.
+        /// SSE channel registered at slice 1 with two event types afterslice 11:  - `server-tick`       — heartbeat every ~15 s (slice 1).  - `breach-detected`   — one per newly-inserted `dbo.Alerts`    row (slice 11). Payload: `BreachDetectedPayload`. Fires    from the `ThresholdAlertScanner` BackgroundService at    wall-minute cadence.Slice 13 will add `clock-changed`.Subscribers are tracked in `AlertStream` (.NET singleton). Closingthe connection unsubscribes cleanly via `HttpContext.RequestAborted`.`Last-Event-ID` reconnection is honoured; `breach-detected` eventsreceive monotonically-increasing event ids on the same id spaceas `server-tick` so a reconnecting client never re-receives them.
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>

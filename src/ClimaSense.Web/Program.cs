@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using ClimaSense.Web.Alerts;
 using ClimaSense.Web.Anomalies;
 using ClimaSense.Web.Clock;
 using ClimaSense.Web.Comfort;
@@ -234,6 +235,75 @@ builder.Services.AddScoped<ProfileReadService>(sp =>
     var fetcher = sp.GetRequiredService<SqlProfileFetcher>();
     return new ProfileReadService(fetcher.FetchRangeAsync);
 });
+
+// ---------------------------------------------------------------------
+// Alerts — slice 11. Three concrete services follow the same
+// delegate-seam pattern used by slices 3-10:
+//
+//   * `AlertReadService`     — `GET /api/alerts` history read; clipped
+//     via `dbo.fv_alerts_at_cursor(@asOf)` (init-db.sql §3.5).
+//   * `AlertRuleReadService` — `GET /api/alerts/rules` list of enabled
+//     rules.
+//   * `AlertScanService`     — gaps-and-islands SQL runner; consumed by
+//     the `ThresholdAlertScanner` hosted service which fires every
+//     wall-minute and writes new `dbo.Alerts` rows + broadcasts a
+//     `breach-detected` SSE event per insert.
+//
+// The SQL is on `SqlAlertScanner` (loadRules / scanBreaches / insert)
+// and `SqlAlertReader` (history fetch) — golden-string pinned via
+// public consts so the unit tests can lock the cursor-clipping +
+// closure-only filter shape.
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<SqlAlertReader>();
+builder.Services.AddSingleton<SqlAlertScanner>();
+
+builder.Services.AddScoped<AlertReadService>(sp =>
+{
+    var reader = sp.GetRequiredService<SqlAlertReader>();
+    return new AlertReadService(reader.FetchHistoryAsync);
+});
+
+builder.Services.AddScoped<AlertRuleReadService>(sp =>
+{
+    var scanner = sp.GetRequiredService<SqlAlertScanner>();
+    return new AlertRuleReadService(scanner.LoadRulesAsync);
+});
+
+builder.Services.AddScoped<AlertScanService>(sp =>
+{
+    var scanner = sp.GetRequiredService<SqlAlertScanner>();
+    return new AlertScanService(
+        rulesLoader: scanner.LoadRulesAsync,
+        breachScanner: scanner.ScanBreachesAsync,
+        alertInserter: scanner.InsertAlertAsync);
+});
+
+// The initial-delay parameter is read once at registration so an
+// operator can shorten it via `CLIMASENSE_ALERT_SCAN_INITIAL_DELAY_SECONDS`
+// when bootstrapping a fresh demo. Default is 30 wall-seconds.
+builder.Services.AddSingleton<ThresholdAlertScanner>(sp =>
+{
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var initialDelay = ThresholdAlertScanner.DefaultInitialDelay;
+    if (int.TryParse(
+            cfg["CLIMASENSE_ALERT_SCAN_INITIAL_DELAY_SECONDS"],
+            System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out var parsedSeconds)
+        && parsedSeconds >= 0
+        && parsedSeconds <= 3600)
+    {
+        initialDelay = TimeSpan.FromSeconds(parsedSeconds);
+    }
+    return new ThresholdAlertScanner(
+        scopeFactory: sp.GetRequiredService<IServiceScopeFactory>(),
+        stream: sp.GetRequiredService<AlertStream>(),
+        clock: sp.GetRequiredService<IClock>(),
+        logger: sp.GetRequiredService<ILogger<ThresholdAlertScanner>>(),
+        initialDelay: initialDelay);
+});
+builder.Services.AddHostedService(
+    sp => sp.GetRequiredService<ThresholdAlertScanner>());
 
 // ---------------------------------------------------------------------
 // Razor Pages — single placeholder Index page.
@@ -615,6 +685,52 @@ app.MapGet("/api/profiles", async (
             error: "invalid_range",
             message: ex.Message);
     }
+});
+
+// ---------------------------------------------------------------------
+// Alerts — slice 11. Read-path bypass: web tier reads `dbo.Alerts`
+// through `dbo.fv_alerts_at_cursor(@asOf)` directly; the ml
+// container is NOT involved. The table is populated by the
+// `ThresholdAlertScanner` BackgroundService (wall-minute cadence)
+// running inside this same web tier.
+//
+//   * GET /api/alerts?limit=N    — most-recent alerts (clamped 1..200).
+//   * GET /api/alerts/rules      — list of enabled rules.
+//
+// The SSE `breach-detected` event uses the existing `/api/alerts/stream`
+// endpoint (slice 1) — see `AlertStream.Broadcast` invoked from
+// `ThresholdAlertScanner.TickOnceAsync`.
+// ---------------------------------------------------------------------
+app.MapGet("/api/alerts", async (
+    HttpContext ctx,
+    AlertReadService alerts,
+    CursorSnapshot cursor,
+    int? limit,
+    CancellationToken cancellationToken) =>
+{
+    if (limit is { } l && (l < 1 || l > AlertReadService.MaxLimit))
+    {
+        return BadRequest(ctx,
+            error: "invalid_limit",
+            message:
+                "`limit` must be between 1 and " + AlertReadService.MaxLimit + ".");
+    }
+
+    var response = await alerts
+        .GetHistoryAsync(cursor, limit, cancellationToken)
+        .ConfigureAwait(false);
+    return Results.Json(response, statusCode: StatusCodes.Status200OK);
+});
+
+app.MapGet("/api/alerts/rules", async (
+    HttpContext ctx,
+    AlertRuleReadService rules,
+    CancellationToken cancellationToken) =>
+{
+    var response = await rules
+        .GetAllAsync(cancellationToken)
+        .ConfigureAwait(false);
+    return Results.Json(response, statusCode: StatusCodes.Status200OK);
 });
 
 // Liveness — process up.
