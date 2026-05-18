@@ -1,4 +1,4 @@
-# ClimaSense — cross-tier wire format (Slice 9 surface).
+# ClimaSense — cross-tier wire format (Slice 10 surface).
 #
 # This file is the source of truth for the .NET ↔ Python contract.
 # Slice 2 introduced the ML-tier request/response surface (forecast /
@@ -42,6 +42,15 @@
 # `/api/profiles` (range read of `dbo.DayProfiles` via the cursor-
 # clipped TVF); `POST /api/ml/run/profiles` proxies the on-demand
 # button.
+# Slice 10 (#12) adds the Comfort Budget panel. One new web-tier-only
+# endpoint — `GET /api/comfort/budget` — surfaces three deterministic
+# SQL aggregations over `dbo.ComfortScores` + `dbo.DayProfiles`:
+# hours-outside-zone (last 7 days), worst calendar cell, and a
+# 7-day daily-trend sparkline. Both threshold (default 70) and window
+# (default 7 days) are configurable via `COMFORT_DISCOMFORT_THRESHOLD`
+# and `COMFORT_BUDGET_WINDOW_DAYS`. The dashboard panel hydrates from
+# this single endpoint; the ml container is NOT involved. See
+# ADR-0006.
 #
 # Camel-case JSON only. The .NET tier configures System.Text.Json with
 # JsonNamingPolicy.CamelCase; FastAPI relies on Pydantic field aliases
@@ -51,7 +60,7 @@
 openapi: 3.0.3
 info:
   title: ClimaSense Platform API
-  version: 0.9.0-slice-9
+  version: 0.10.0-slice-10
   description: |
     Cross-tier contract for ClimaSense. The web tier (ASP.NET Core) and
     the ML tier (FastAPI) both honour this document. Each tier MUST mint
@@ -553,6 +562,48 @@ paths:
   # `dbo.fv_comfortscores_at_cursor(@asOf)` (init-db.sql §3.4). The
   # ml container is NOT involved.
   # -------------------------------------------------------------------
+  # -------------------------------------------------------------------
+  # Comfort Budget — slice 10. Web-tier-only read combining three
+  # deterministic SQL aggregations over `dbo.ComfortScores` +
+  # `dbo.DayProfiles` (both cursor-clipped via TVFs). Replaces the
+  # original "recommendations engine" per ADR-0006: auditable facts
+  # rather than simulated tips. The ml container is NOT involved.
+  # -------------------------------------------------------------------
+  /api/comfort/budget:
+    get:
+      summary: Comfort Budget — three aggregations for the last N days.
+      description: |
+        Returns the three deterministic SQL aggregations that back the
+        dashboard's Comfort Budget panel:
+
+          1. `hoursOutsideZone` — `COUNT(*) FROM ComfortScores` in the
+             window where `Score < threshold` (default threshold = 70
+             from `COMFORT_DISCOMFORT_THRESHOLD`).
+          2. `worstCell` — the `DayProfiles` row in the window with
+             the most-negative `MeanResidual` (the "coldest cell").
+             `null` when no day-profile row is visible at the cursor.
+             Tie-breaker: most-recent date wins.
+          3. `trend` — daily min/max/mean of `Score` for the window,
+             via `DATE_BUCKET(DAY, 1, BucketTime)`. Empty days are
+             omitted (the dashboard interpolates visually).
+
+        Window: `[cursor - windowDays, cursor]` with both endpoints
+        inclusive on the SQL side. `windowDays` defaults to 7
+        (`COMFORT_BUDGET_WINDOW_DAYS`).
+
+        Always returns 200; empty `dbo.ComfortScores` / `dbo.DayProfiles`
+        produces `hoursOutsideZone: 0`, `worstCell: null`, `trend: []`.
+        Read-path bypass — the ml container is NOT involved.
+      operationId: getComfortBudget
+      tags: [comfort]
+      responses:
+        "200":
+          description: Comfort Budget envelope.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComfortBudgetResponse"
+
   /api/comfort/current:
     get:
       summary: Return the most recent comfort score visible at the cursor.
@@ -1353,6 +1404,126 @@ components:
           type: string
           format: date-time
           description: When the row was written into `ComfortScores` (UTC).
+
+    # -----------------------------------------------------------------
+    # Comfort Budget — slice 10 web-tier read shape. Returned by
+    # `GET /api/comfort/budget`. Three pure SQL aggregations packaged
+    # into one payload so the dashboard panel hydrates from a single
+    # request. Per ADR-0006 this replaces the dropped "recommendations
+    # engine" with deterministic facts over the cursor-clipped tables.
+    # -----------------------------------------------------------------
+    WorstCalendarCell:
+      type: object
+      additionalProperties: false
+      required: [date, dayOfWeek, meanResidual, maxAbsZscore, pattern]
+      properties:
+        date:
+          type: string
+          format: date
+          description: Calendar day of the worst cell (UTC).
+        dayOfWeek:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: 0 = Monday, 6 = Sunday (ISO 8601 weekday).
+        meanResidual:
+          type: number
+          format: double
+          description: |
+            Mean of standardised residuals for the day. Most-negative
+            wins (the "coldest" cell). Tie-breaker: most-recent date.
+        maxAbsZscore:
+          type: number
+          format: double
+          description: Largest absolute z-score for the day.
+        pattern:
+          $ref: "#/components/schemas/Pattern"
+
+    ComfortTrendPoint:
+      type: object
+      additionalProperties: false
+      required: [day, minScore, maxScore, meanScore, sampleCount]
+      properties:
+        day:
+          type: string
+          format: date
+          description: |
+            Calendar day of the bucket (UTC). One row per day where
+            `dbo.ComfortScores` has at least one row in the window.
+        minScore:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Day's minimum `Score`.
+        maxScore:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Day's maximum `Score`.
+        meanScore:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: Day's mean `Score` (sparkline value).
+        sampleCount:
+          type: integer
+          minimum: 1
+          description: Number of `dbo.ComfortScores` rows in the bucket.
+
+    ComfortBudgetResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - hoursOutsideZone
+        - threshold
+        - windowDays
+        - windowStart
+        - windowEnd
+        - trend
+      properties:
+        hoursOutsideZone:
+          type: integer
+          minimum: 0
+          description: |
+            Count of `dbo.ComfortScores` rows in the window whose
+            `Score` is strictly less than `threshold`.
+        threshold:
+          type: number
+          format: double
+          minimum: 0
+          maximum: 100
+          description: |
+            Discomfort threshold used to evaluate `hoursOutsideZone`.
+            Sourced from `COMFORT_DISCOMFORT_THRESHOLD` env var
+            (default 70). Surfaced so the dashboard can label the
+            "<threshold" without a round-trip to the config.
+        windowDays:
+          type: integer
+          minimum: 1
+          maximum: 366
+          description: |
+            Width of the window in days. Sourced from
+            `COMFORT_BUDGET_WINDOW_DAYS` (default 7).
+        windowStart:
+          type: string
+          format: date-time
+          description: |
+            UTC datetime — inclusive lower bound of the window
+            (`cursor - windowDays`).
+        windowEnd:
+          type: string
+          format: date-time
+          description: UTC datetime — equals the cursor's `asOf`.
+        worstCell:
+          $ref: "#/components/schemas/WorstCalendarCell"
+          nullable: true
+        trend:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComfortTrendPoint"
 
     # -----------------------------------------------------------------
     # LatestAnomalyResponse — slice 8 web-tier read shape. Returned by

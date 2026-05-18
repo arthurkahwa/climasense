@@ -140,6 +140,13 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # bypasses the ml container.
         "DayProfileRowWithComputedAt",
         "DayProfilesResponse",
+        # Slice 10: only referenced by /api/comfort/budget (web-tier-
+        # only). Three deterministic SQL aggregations served from
+        # `dbo.ComfortScores` + `dbo.DayProfiles` (both cursor-clipped
+        # via TVFs). The ml container is NOT involved.
+        "WorstCalendarCell",
+        "ComfortTrendPoint",
+        "ComfortBudgetResponse",
     }
     # Paths declared in the contract for cross-tier audit purposes but
     # NOT served by the FastAPI ml tier (they live on the .NET web tier).
@@ -184,6 +191,13 @@ def _normalised_surface(spec: dict[str, Any]) -> dict[str, Any]:
         # and the nightly recompute; the range read lives on the
         # web tier so an ml outage doesn't blank the Explorer page.
         "/api/profiles",
+        # Slice 10: /api/comfort/budget is a .NET-tier read of three
+        # deterministic SQL aggregations over `dbo.ComfortScores` +
+        # `dbo.DayProfiles` (both cursor-clipped via TVFs). Replaces
+        # the dropped recommendations engine (ADR-0006). The ml
+        # container is NOT involved — the dashboard panel survives an
+        # ml outage.
+        "/api/comfort/budget",
     }
 
     def _strip(node: Any) -> Any:

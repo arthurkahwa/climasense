@@ -217,6 +217,106 @@
             color: #79c0ff;
             border: 1px solid rgba(121, 192, 255, 0.35);
         }
+        /* Slice 10: comfort budget panel */
+        .budget-card {
+            display: grid;
+            grid-template-columns: 1fr 1fr 2fr;
+            gap: 1.5rem;
+            align-items: stretch;
+            background: linear-gradient(145deg, #161b22, #0d1117);
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 1.25rem 1.75rem;
+            margin: 1rem 0 2rem 0;
+        }
+        .budget-card .subcard {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        .budget-card .label {
+            color: #8b949e;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .budget-card .big-number {
+            font-size: 3rem;
+            font-weight: 600;
+            color: #f0f6fc;
+            line-height: 1;
+        }
+        .budget-card .big-number .unit {
+            font-size: 1.25rem;
+            font-weight: 400;
+            color: #8b949e;
+            margin-left: 0.25rem;
+        }
+        .budget-card .big-number.discomfort-high { color: #f85149; }
+        .budget-card .big-number.discomfort-medium { color: #d29922; }
+        .budget-card .big-number.discomfort-low { color: #56d364; }
+        .budget-card .worst-line {
+            font-size: 1.1rem;
+            color: #f0f6fc;
+            font-weight: 500;
+        }
+        .budget-card .worst-z {
+            color: #8b949e;
+            font-size: 0.9rem;
+        }
+        .budget-card .pattern-pill {
+            display: inline-block;
+            padding: 0.18rem 0.55rem;
+            border-radius: 999px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            text-transform: lowercase;
+            letter-spacing: 0.02em;
+        }
+        .budget-card .pattern-pill.quiet {
+            background: rgba(139, 148, 158, 0.15);
+            color: #8b949e;
+            border: 1px solid rgba(139, 148, 158, 0.35);
+        }
+        .budget-card .pattern-pill.warm {
+            background: rgba(248, 81, 73, 0.15);
+            color: #f85149;
+            border: 1px solid rgba(248, 81, 73, 0.35);
+        }
+        .budget-card .pattern-pill.cool {
+            background: rgba(121, 192, 255, 0.15);
+            color: #79c0ff;
+            border: 1px solid rgba(121, 192, 255, 0.35);
+        }
+        .budget-card .pattern-pill.volatile {
+            background: rgba(210, 153, 34, 0.15);
+            color: #d29922;
+            border: 1px solid rgba(210, 153, 34, 0.35);
+        }
+        .budget-card .trend-svg {
+            width: 100%;
+            height: 60px;
+            display: block;
+        }
+        .budget-card .trend-empty {
+            color: #8b949e;
+            font-size: 0.9rem;
+        }
+        .budget-card .meta {
+            grid-column: 1 / -1;
+            color: #8b949e;
+            font-size: 0.85rem;
+            border-top: 1px solid #30363d;
+            padding-top: 0.75rem;
+            margin-top: 0.25rem;
+        }
+        .budget-card.error .big-number,
+        .budget-card.error .worst-line {
+            color: #f85149;
+            font-size: 1.25rem;
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
@@ -311,6 +411,40 @@
         <div class="meta" id="comfort-meta">
             Fetching latest comfort score from
             <code>/api/comfort/current</code>&hellip;
+        </div>
+    </section>
+
+    <!-- ============================================== -->
+    <!-- Slice 10: Comfort Budget (7-day) panel        -->
+    <!-- ============================================== -->
+    <section class="panel">
+        <strong>Comfort Budget (7-day)</strong>
+        <div class="budget-card" id="budget-card" style="margin-top:0.75rem;">
+            <div class="subcard">
+                <span class="label">Hours outside zone</span>
+                <span class="big-number" id="budget-hours-wrap">
+                    <span id="budget-hours">&hellip;</span><span class="unit">h</span>
+                </span>
+                <span class="worst-z" id="budget-hours-sub">
+                    last 7 days, score &lt; &hellip;
+                </span>
+            </div>
+            <div class="subcard">
+                <span class="label">Worst calendar cell</span>
+                <span class="worst-line" id="budget-worst-line">&hellip;</span>
+                <span class="worst-z" id="budget-worst-z">&hellip;</span>
+            </div>
+            <div class="subcard">
+                <span class="label">7-day comfort trend (mean)</span>
+                <svg class="trend-svg" id="budget-trend-svg"
+                     viewBox="0 0 200 60" preserveAspectRatio="none"
+                     aria-label="7-day comfort trend sparkline"></svg>
+                <span class="trend-empty" id="budget-trend-empty"
+                      style="display:none;">no trend yet</span>
+            </div>
+            <div class="meta" id="budget-meta">
+                Fetching from <code>/api/comfort/budget</code>&hellip;
+            </div>
         </div>
     </section>
 
@@ -667,6 +801,175 @@
                     typeEl.textContent = TYPE_LABEL[body.anomalyType] || body.anomalyType;
                     severityEl.textContent = (Number(body.severity)).toFixed(2);
                     detectedEl.textContent = formatTimestamp(body.detectedAt);
+                    renderMeta(body);
+                })
+                .catch(function (err) {
+                    renderError(err && err.message ? err.message : 'unknown error');
+                });
+        })();
+
+        // ----------------------------------------------------------------
+        // Slice 10: Comfort Budget panel
+        // ----------------------------------------------------------------
+        (function () {
+            var card = document.getElementById('budget-card');
+            var hoursEl = document.getElementById('budget-hours');
+            var hoursWrap = document.getElementById('budget-hours-wrap');
+            var hoursSubEl = document.getElementById('budget-hours-sub');
+            var worstLineEl = document.getElementById('budget-worst-line');
+            var worstZEl = document.getElementById('budget-worst-z');
+            var trendSvg = document.getElementById('budget-trend-svg');
+            var trendEmpty = document.getElementById('budget-trend-empty');
+            var metaEl = document.getElementById('budget-meta');
+
+            var DOW_LABEL = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+            var SVG_NS = 'http://www.w3.org/2000/svg';
+
+            function colourFromHours(hours, windowDays) {
+                // Bands: ≤ 8 = green (one shift), 8–24 = amber, > 24 = red.
+                // Scales linearly with window size to keep the bands
+                // meaningful when COMFORT_BUDGET_WINDOW_DAYS changes.
+                var perDay = windowDays > 0 ? hours / windowDays : 0;
+                if (perDay >= 24 / 7) return 'discomfort-high';
+                if (perDay >= 8 / 7)  return 'discomfort-medium';
+                return 'discomfort-low';
+            }
+
+            function renderWorst(worst) {
+                if (!worst) {
+                    worstLineEl.textContent = '— no day-profile yet';
+                    worstZEl.textContent = '';
+                    return;
+                }
+                // textContent-only renders avoid any injection surface.
+                while (worstLineEl.firstChild) {
+                    worstLineEl.removeChild(worstLineEl.firstChild);
+                }
+                var label = DOW_LABEL[worst.dayOfWeek] || ('DoW ' + worst.dayOfWeek);
+                worstLineEl.appendChild(document.createTextNode(
+                    label + ' ' + worst.date + '  '));
+                var pill = document.createElement('span');
+                pill.className = 'pattern-pill ' + (worst.pattern || 'quiet');
+                pill.textContent = worst.pattern || '';
+                worstLineEl.appendChild(pill);
+                worstZEl.textContent =
+                    'mean residual ' + Number(worst.meanResidual).toFixed(2) +
+                    ' · |z| max ' + Number(worst.maxAbsZscore).toFixed(2);
+            }
+
+            function renderTrend(trend) {
+                // Clear previous render.
+                while (trendSvg.firstChild) {
+                    trendSvg.removeChild(trendSvg.firstChild);
+                }
+                if (!trend || trend.length === 0) {
+                    trendSvg.style.display = 'none';
+                    trendEmpty.style.display = 'inline';
+                    return;
+                }
+                trendSvg.style.display = 'block';
+                trendEmpty.style.display = 'none';
+
+                // Compute min/max for vertical scaling.
+                var means = trend.map(function (p) { return Number(p.meanScore); });
+                var lo = Math.min.apply(null, means);
+                var hi = Math.max.apply(null, means);
+                // Pad so flat series doesn't collapse to a single line.
+                if (hi - lo < 1) { hi = lo + 1; }
+                var W = 200, H = 60, PAD = 4;
+                var nx = trend.length > 1 ? (W - 2 * PAD) / (trend.length - 1) : 0;
+
+                function y(v) {
+                    var t = (v - lo) / (hi - lo);
+                    return H - PAD - t * (H - 2 * PAD);
+                }
+
+                var points = trend.map(function (p, i) {
+                    return [PAD + i * nx, y(Number(p.meanScore))];
+                });
+                var d = points.reduce(function (acc, pt, i) {
+                    return acc + (i === 0 ? 'M' : 'L') +
+                        pt[0].toFixed(1) + ',' + pt[1].toFixed(1) + ' ';
+                }, '');
+
+                var path = document.createElementNS(SVG_NS, 'path');
+                path.setAttribute('d', d.trim());
+                path.setAttribute('stroke', '#79c0ff');
+                path.setAttribute('stroke-width', '2');
+                path.setAttribute('fill', 'none');
+                trendSvg.appendChild(path);
+
+                // Dot per point + min/max band as thin error bars.
+                trend.forEach(function (p, i) {
+                    var cx = PAD + i * nx;
+                    var hiY = y(Number(p.maxScore));
+                    var loY = y(Number(p.minScore));
+                    var bar = document.createElementNS(SVG_NS, 'line');
+                    bar.setAttribute('x1', cx);
+                    bar.setAttribute('x2', cx);
+                    bar.setAttribute('y1', hiY);
+                    bar.setAttribute('y2', loY);
+                    bar.setAttribute('stroke', '#30363d');
+                    bar.setAttribute('stroke-width', '1');
+                    trendSvg.appendChild(bar);
+                    var dot = document.createElementNS(SVG_NS, 'circle');
+                    dot.setAttribute('cx', cx);
+                    dot.setAttribute('cy', y(Number(p.meanScore)));
+                    dot.setAttribute('r', '2.5');
+                    dot.setAttribute('fill', '#79c0ff');
+                    trendSvg.appendChild(dot);
+                });
+            }
+
+            function renderMeta(body) {
+                var startD = (body.windowStart || '').slice(0, 10);
+                var endD = (body.windowEnd || '').slice(0, 10);
+                metaEl.textContent =
+                    'window ' + startD + ' → ' + endD +
+                    ' · threshold ' + body.threshold +
+                    ' · source: ComfortScores + DayProfiles';
+            }
+
+            function renderError(message) {
+                card.classList.add('error');
+                hoursEl.textContent = '—';
+                worstLineEl.textContent = '—';
+                worstZEl.textContent = '';
+                trendSvg.style.display = 'none';
+                trendEmpty.style.display = 'inline';
+                trendEmpty.textContent = 'trend unavailable';
+                metaEl.textContent = '/api/comfort/budget: ' + message;
+            }
+
+            fetch('/api/comfort/budget', { headers: { 'Accept': 'application/json' } })
+                .then(function (resp) {
+                    if (!resp.ok) {
+                        return resp.json().then(function (body) {
+                            throw {
+                                status: resp.status,
+                                error: body && body.error,
+                                message: body && body.message
+                            };
+                        }, function () {
+                            throw {
+                                status: resp.status,
+                                error: 'http_error',
+                                message: 'HTTP ' + resp.status
+                            };
+                        });
+                    }
+                    return resp.json();
+                })
+                .then(function (body) {
+                    // body: { hoursOutsideZone, threshold, windowDays,
+                    //         windowStart, windowEnd, worstCell, trend }
+                    hoursEl.textContent = String(body.hoursOutsideZone);
+                    hoursWrap.classList.add(
+                        colourFromHours(body.hoursOutsideZone, body.windowDays));
+                    hoursSubEl.textContent =
+                        'last ' + body.windowDays + ' days, score < ' + body.threshold;
+                    renderWorst(body.worstCell);
+                    renderTrend(body.trend);
                     renderMeta(body);
                 })
                 .catch(function (err) {
