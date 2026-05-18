@@ -139,6 +139,11 @@ services:
       CLIMASENSE_DB_USER: sa
       CLIMASENSE_DB_PASSWORD: "${MSSQL_SA_PASSWORD}"
       CLIMASENSE_ML_BASE_URL: "http://ml:8000"
+      # Slice 10: Comfort Budget panel — threshold + window read once at
+      # startup, used by `ComfortBudgetReadService`. Defaults match
+      # ADR-0006 + the #2 epic (70 / 7).
+      COMFORT_DISCOMFORT_THRESHOLD: "${COMFORT_DISCOMFORT_THRESHOLD:-70}"
+      COMFORT_BUDGET_WINDOW_DAYS: "${COMFORT_BUDGET_WINDOW_DAYS:-7}"
       Logging__LogLevel__Default: "${LOG_LEVEL}"
     depends_on:
       db:

@@ -164,6 +164,45 @@ builder.Services.AddScoped<ComfortReadService>(sp =>
 });
 
 // ---------------------------------------------------------------------
+// Comfort Budget — slice 10. `ComfortBudgetReadService` follows the
+// slice-5/6/7/8/9 delegate-seam pattern. Three pure SQL aggregations
+// over `dbo.ComfortScores` + `dbo.DayProfiles` (both cursor-clipped
+// via TVFs at the schema level). The discomfort threshold comes from
+// `COMFORT_DISCOMFORT_THRESHOLD` (default 70.0) and the window from
+// `COMFORT_BUDGET_WINDOW_DAYS` (default 7) per the epic. Both are read
+// once at DI construction so a config change requires a process
+// restart (acceptable — they're slow-moving knobs, not per-request).
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<SqlComfortBudgetFetcher>();
+builder.Services.AddScoped<ComfortBudgetReadService>(sp =>
+{
+    var fetcher = sp.GetRequiredService<SqlComfortBudgetFetcher>();
+    var cfg = sp.GetRequiredService<IConfiguration>();
+    var threshold = double.TryParse(
+        cfg["COMFORT_DISCOMFORT_THRESHOLD"],
+        System.Globalization.NumberStyles.Float,
+        System.Globalization.CultureInfo.InvariantCulture,
+        out var parsedThreshold)
+        && parsedThreshold >= 0.0
+        && parsedThreshold <= 100.0
+            ? parsedThreshold
+            : ComfortBudgetReadService.DefaultThreshold;
+    var windowDays = int.TryParse(
+        cfg["COMFORT_BUDGET_WINDOW_DAYS"],
+        System.Globalization.NumberStyles.Integer,
+        System.Globalization.CultureInfo.InvariantCulture,
+        out var parsedWindow)
+        && parsedWindow > 0
+        && parsedWindow <= 366
+            ? parsedWindow
+            : ComfortBudgetReadService.DefaultWindowDays;
+    return new ComfortBudgetReadService(
+        fetcher.FetchAsync,
+        threshold: threshold,
+        windowDays: windowDays);
+});
+
+// ---------------------------------------------------------------------
 // Anomalies — slice 8. `AnomalyReadService` follows the same
 // delegate-seam pattern. Both reads go through
 // `dbo.fv_anomalies_at_cursor(@asOf)` so cursor-clipping is enforced
@@ -398,6 +437,26 @@ app.MapGet("/api/comfort/current", async (
             statusCode: StatusCodes.Status404NotFound);
     }
     return Results.Json(current, statusCode: StatusCodes.Status200OK);
+});
+
+// ---------------------------------------------------------------------
+// Comfort Budget — slice 10. Read-path bypass: three pure SQL
+// aggregations served directly from `dbo.ComfortScores` +
+// `dbo.DayProfiles` through the cursor-clipped TVFs
+// (`dbo.fv_comfortscores_at_cursor`, `dbo.fv_dayprofiles_at_cursor`).
+// The ml container is NOT involved. Empty windows return 200 with
+// zero hours / null worstCell / empty trend (common during the brief
+// lifespan window before the schedulers emit their first rows).
+// ---------------------------------------------------------------------
+app.MapGet("/api/comfort/budget", async (
+    HttpContext ctx,
+    ComfortBudgetReadService budget,
+    CursorSnapshot cursor,
+    CancellationToken cancellationToken) =>
+{
+    var response = await budget.GetAsync(cursor, cancellationToken)
+        .ConfigureAwait(false);
+    return Results.Json(response, statusCode: StatusCodes.Status200OK);
 });
 
 // ---------------------------------------------------------------------

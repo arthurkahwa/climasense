@@ -84,6 +84,10 @@ _REAL_ENDPOINTS = {
     # Slice 9: /api/profiles is a .NET web-tier read of the
     # `dbo.fv_dayprofiles_at_cursor` TVF — bypasses the ml tier.
     ("/api/profiles", "get"),
+    # Slice 10: /api/comfort/budget is a .NET web-tier read combining
+    # three deterministic SQL aggregations over `dbo.ComfortScores` +
+    # `dbo.DayProfiles` — bypasses the ml tier (per ADR-0006).
+    ("/api/comfort/budget", "get"),
 }
 
 
