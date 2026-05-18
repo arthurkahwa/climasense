@@ -8,7 +8,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ClimaSense — slice 3 dashboard</title>
+    <title>ClimaSense — dashboard</title>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
@@ -100,6 +100,57 @@
             color: #8b949e;
             font-size: 0.9rem;
         }
+        /* Slice 7: comfort card */
+        .comfort-card {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1.5rem;
+            align-items: center;
+            background: linear-gradient(145deg, #161b22, #0d1117);
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 1.25rem 1.75rem;
+            margin: 1rem 0 2rem 0;
+        }
+        .comfort-card .field {
+            display: flex;
+            flex-direction: column;
+            gap: 0.3rem;
+        }
+        .comfort-card .label {
+            color: #8b949e;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+        }
+        .comfort-card .value {
+            font-size: 2.25rem;
+            font-weight: 600;
+            color: #f0f6fc;
+            line-height: 1;
+        }
+        .comfort-card .value .unit {
+            font-size: 1.25rem;
+            font-weight: 400;
+            color: #8b949e;
+            margin-left: 0.25rem;
+        }
+        .comfort-card .meta {
+            grid-column: 1 / -1;
+            color: #8b949e;
+            font-size: 0.85rem;
+            border-top: 1px solid #30363d;
+            padding-top: 0.75rem;
+        }
+        .comfort-card.error .value {
+            color: #f85149;
+            font-size: 1.25rem;
+            font-weight: 500;
+        }
+        .rating-excellent { color: #56d364; }
+        .rating-acceptable { color: #79c0ff; }
+        .rating-marginal { color: #d29922; }
+        .rating-uncomfortable { color: #f85149; }
     </style>
 </head>
 <body>
@@ -143,6 +194,34 @@
         </div>
     </section>
 
+    <!-- ============================================== -->
+    <!-- Slice 7: comfort score card                   -->
+    <!-- ============================================== -->
+    <section class="comfort-card" id="comfort-card">
+        <div class="field">
+            <span class="label">Comfort score</span>
+            <span class="value">
+                <span id="comfort-score">&hellip;</span><span class="unit">/100</span>
+            </span>
+        </div>
+        <div class="field">
+            <span class="label">Rating</span>
+            <span class="value" id="comfort-rating-wrap">
+                <span id="comfort-rating">&hellip;</span>
+            </span>
+        </div>
+        <div class="field">
+            <span class="label">Season</span>
+            <span class="value">
+                <span id="comfort-season">&hellip;</span>
+            </span>
+        </div>
+        <div class="meta" id="comfort-meta">
+            Fetching latest comfort score from
+            <code>/api/comfort/current</code>&hellip;
+        </div>
+    </section>
+
     <section class="panel">
         <strong>Heartbeat (slice-1 SSE smoke test)</strong>
         <div class="heartbeat-counter" id="tick-count">0</div>
@@ -154,19 +233,24 @@
     </section>
 
     <section class="panel">
-        <strong>What slice 3 ships</strong>
+        <strong>What slice 7 ships</strong>
         <ul class="legend">
-            <li>One-shot CSV bootstrap via <code>bcp</code> on first
-                <code>docker compose up</code>. Idempotent — subsequent
-                boots skip when <code>SensorReadings</code> already
-                has rows.</li>
-            <li><code>GET /api/readings/latest</code> served by the
-                .NET tier directly from SQL Server (read-path bypass
-                per ADR-0010).</li>
-            <li>The card above is hydrated by a single
-                <code>fetch('/api/readings/latest')</code> on page load.
-                No polling, no SSE — the dashboard auto-refresh story
-                lands with the replay clock in slice 12.</li>
+            <li>Pure <code>ComfortCalculator</code> on the ml tier —
+                ASHRAE 55-2020 graphical comfort zone with summer /
+                winter polygons (per ADR-0005). Season is selected by
+                calendar month + <code>COMFORT_HEMISPHERE</code> env
+                var (default <code>N</code>).</li>
+            <li>APScheduler β-prime gate (slice-5 pattern) — one
+                <code>ComfortScores</code> row per replay-hour.</li>
+            <li><code>GET /api/comfort/current</code> served by the
+                .NET tier directly from
+                <code>dbo.fv_comfortscores_at_cursor(@@asOf)</code>
+                (read-path bypass per ADR-0010).</li>
+            <li><code>POST /api/ml/run/comfort</code> proxies the
+                .NET tier through to the ml-tier
+                <code>GET /api/comfort/score?hours=24</code> for
+                on-demand recompute (idempotent on the cursor's
+                bucket).</li>
         </ul>
     </section>
 
@@ -252,6 +336,106 @@
                 .then(function (body) {
                     tempEl.textContent = (body.temperatureC).toFixed(1);
                     humidityEl.textContent = (body.humidityPct).toFixed(1);
+                    renderMeta(body);
+                })
+                .catch(function (err) {
+                    renderError(err && err.message ? err.message : 'unknown error');
+                });
+        })();
+
+        // ----------------------------------------------------------------
+        // Slice 7: comfort score
+        // ----------------------------------------------------------------
+        (function () {
+            var scoreEl = document.getElementById('comfort-score');
+            var ratingEl = document.getElementById('comfort-rating');
+            var ratingWrap = document.getElementById('comfort-rating-wrap');
+            var seasonEl = document.getElementById('comfort-season');
+            var metaEl = document.getElementById('comfort-meta');
+            var cardEl = document.getElementById('comfort-card');
+
+            function capitalize(s) {
+                if (typeof s !== 'string' || s.length === 0) return s;
+                return s.charAt(0).toUpperCase() + s.slice(1);
+            }
+
+            function formatTimestamp(iso) {
+                try {
+                    var d = new Date(iso);
+                    return d.toLocaleString(undefined, {
+                        year: 'numeric', month: 'short', day: '2-digit',
+                        hour: '2-digit', minute: '2-digit',
+                        timeZoneName: 'short',
+                    });
+                } catch (e) {
+                    return iso;
+                }
+            }
+
+            function renderMeta(body) {
+                while (metaEl.firstChild) {
+                    metaEl.removeChild(metaEl.firstChild);
+                }
+                metaEl.appendChild(document.createTextNode('bucket '));
+                var ts = document.createElement('strong');
+                ts.textContent = formatTimestamp(body.bucketTime);
+                metaEl.appendChild(ts);
+                metaEl.appendChild(document.createTextNode(' · source: '));
+                var code = document.createElement('code');
+                code.textContent = 'ComfortScores';
+                metaEl.appendChild(code);
+                metaEl.appendChild(document.createTextNode(
+                    ' (latest row, cursor-clipped)'));
+            }
+
+            function renderError(message) {
+                cardEl.classList.add('error');
+                scoreEl.parentElement.textContent = '—';
+                ratingEl.textContent = '—';
+                seasonEl.textContent = '—';
+                metaEl.textContent =
+                    '/api/comfort/current: ' + message;
+            }
+
+            fetch('/api/comfort/current', { headers: { 'Accept': 'application/json' } })
+                .then(function (resp) {
+                    if (resp.status === 404) {
+                        return resp.json().then(function (body) {
+                            throw {
+                                status: 404,
+                                error: body && body.error,
+                                message: (body && body.message) ||
+                                    'no comfort row yet',
+                            };
+                        }, function () {
+                            throw { status: 404, error: 'no_comfort_yet',
+                                message: 'no comfort row yet' };
+                        });
+                    }
+                    if (!resp.ok) {
+                        return resp.json().then(function (body) {
+                            throw {
+                                status: resp.status,
+                                error: body && body.error,
+                                message: body && body.message
+                            };
+                        }, function () {
+                            throw {
+                                status: resp.status,
+                                error: 'http_error',
+                                message: 'HTTP ' + resp.status
+                            };
+                        });
+                    }
+                    return resp.json();
+                })
+                .then(function (body) {
+                    // body: { score, rating, season, bucketTime, computedAt }
+                    scoreEl.textContent = (body.score).toFixed(0);
+                    ratingEl.textContent = capitalize(body.rating);
+                    seasonEl.textContent = capitalize(body.season);
+                    // Colour the rating wrapper by rating band.
+                    ratingWrap.classList.add('rating-' + body.rating);
                     renderMeta(body);
                 })
                 .catch(function (err) {

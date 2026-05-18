@@ -34,15 +34,12 @@ namespace ClimaSense.Web.Generated.MLClient.Api.Comfort.Score
         {
         }
         /// <summary>
-        /// Scores the average of the last `hours` of `SensorReadings`(clipped at cursor) against ASHRAE 55 summer/winter polygonsselected by calendar month and `COMFORT_HEMISPHERE` env var.Pure function — no DB writes.
+        /// Scores the average of the last `hours` of `SensorReadings`(clipped at cursor) against ASHRAE 55 summer/winter polygonsselected by calendar month and `COMFORT_HEMISPHERE` env var.Side-effect: also `MERGE`s the resulting `(BucketTime, Score,Rating, Season)` into `dbo.ComfortScores`. Idempotent per`UNIQUE(BucketTime)` — re-running at the same cursorposition produces zero net change because the calculator ispure.
         /// </summary>
         /// <returns>A <see cref="global::ClimaSense.Web.Generated.MLClient.Models.ComfortScoreResponse"/></returns>
         /// <param name="cancellationToken">Cancellation token to use when cancelling requests</param>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
-        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 501 status code</exception>
-        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 502 status code</exception>
         /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 503 status code</exception>
-        /// <exception cref="global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails">When receiving a 504 status code</exception>
 #if NETSTANDARD2_1_OR_GREATER || NETCOREAPP3_1_OR_GREATER
 #nullable enable
         public async Task<global::ClimaSense.Web.Generated.MLClient.Models.ComfortScoreResponse?> GetAsync(Action<RequestConfiguration<global::ClimaSense.Web.Generated.MLClient.Api.Comfort.Score.ScoreRequestBuilder.ScoreRequestBuilderGetQueryParameters>>? requestConfiguration = default, CancellationToken cancellationToken = default)
@@ -55,15 +52,12 @@ namespace ClimaSense.Web.Generated.MLClient.Api.Comfort.Score
             var requestInfo = ToGetRequestInformation(requestConfiguration);
             var errorMapping = new Dictionary<string, ParsableFactory<IParsable>>
             {
-                { "501", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
-                { "502", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
                 { "503", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
-                { "504", global::ClimaSense.Web.Generated.MLClient.Models.ProblemDetails.CreateFromDiscriminatorValue },
             };
             return await RequestAdapter.SendAsync<global::ClimaSense.Web.Generated.MLClient.Models.ComfortScoreResponse>(requestInfo, global::ClimaSense.Web.Generated.MLClient.Models.ComfortScoreResponse.CreateFromDiscriminatorValue, errorMapping, cancellationToken).ConfigureAwait(false);
         }
         /// <summary>
-        /// Scores the average of the last `hours` of `SensorReadings`(clipped at cursor) against ASHRAE 55 summer/winter polygonsselected by calendar month and `COMFORT_HEMISPHERE` env var.Pure function — no DB writes.
+        /// Scores the average of the last `hours` of `SensorReadings`(clipped at cursor) against ASHRAE 55 summer/winter polygonsselected by calendar month and `COMFORT_HEMISPHERE` env var.Side-effect: also `MERGE`s the resulting `(BucketTime, Score,Rating, Season)` into `dbo.ComfortScores`. Idempotent per`UNIQUE(BucketTime)` — re-running at the same cursorposition produces zero net change because the calculator ispure.
         /// </summary>
         /// <returns>A <see cref="RequestInformation"/></returns>
         /// <param name="requestConfiguration">Configuration for the request such as headers, query parameters, and middleware options.</param>
@@ -91,7 +85,7 @@ namespace ClimaSense.Web.Generated.MLClient.Api.Comfort.Score
             return new global::ClimaSense.Web.Generated.MLClient.Api.Comfort.Score.ScoreRequestBuilder(rawUrl, RequestAdapter);
         }
         /// <summary>
-        /// Scores the average of the last `hours` of `SensorReadings`(clipped at cursor) against ASHRAE 55 summer/winter polygonsselected by calendar month and `COMFORT_HEMISPHERE` env var.Pure function — no DB writes.
+        /// Scores the average of the last `hours` of `SensorReadings`(clipped at cursor) against ASHRAE 55 summer/winter polygonsselected by calendar month and `COMFORT_HEMISPHERE` env var.Side-effect: also `MERGE`s the resulting `(BucketTime, Score,Rating, Season)` into `dbo.ComfortScores`. Idempotent per`UNIQUE(BucketTime)` — re-running at the same cursorposition produces zero net change because the calculator ispure.
         /// </summary>
         [global::System.CodeDom.Compiler.GeneratedCode("Kiota", "1.0.0")]
         public partial class ScoreRequestBuilderGetQueryParameters 

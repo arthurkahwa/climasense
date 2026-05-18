@@ -1,6 +1,6 @@
 """FastAPI entry point for the ML tier.
 
-Slice 5 surface (everything from slice 3 plus the live forecast):
+Slice 7 surface (everything from slice 5/6 plus live comfort scoring):
   * GET  /api/health/live         — process up, no dependency check.
   * GET  /api/health/ready        — DB + bootstrap + forecaster fitted probe.
   * GET  /api/health              — combined alias (never 503; deps in `checks`).
@@ -8,7 +8,7 @@ Slice 5 surface (everything from slice 3 plus the live forecast):
   * POST /api/forecast            — boot-fit emission + persist (slice 5).
   * POST /api/anomalies/detect    — slice-9 stub (501).
   * POST /api/profiles/analyze    — slice-10 stub (501).
-  * GET  /api/comfort/score       — slice-8 stub (501).
+  * GET  /api/comfort/score       — ASHRAE 55 graphical zone (slice 7).
 
 Cross-cutting concerns wired here:
   * Structured JSON logs to stdout via `logging_setup.configure()`.
@@ -52,6 +52,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .clock import IClock, WallClock
+from .comfort import Hemisphere, hemisphere_from_env
+from .comfort_emitter import ComfortEmitter
+from .comfort_router import build_router as build_comfort_router
 from .contract_validator import ContractMismatchError, validate_contract
 from .cursor import CursorSnapshot, bind, release
 from .db import get_engine
@@ -79,6 +82,22 @@ _clock: IClock = WallClock()
 
 def get_clock() -> IClock:
     return _clock
+
+
+# ---------------------------------------------------------------------
+# Comfort hemisphere singleton (slice 7).
+#
+# Read once at module import so the env var is "settled" before
+# uvicorn forks any worker. Changing `COMFORT_HEMISPHERE` requires a
+# process restart — consistent with the slice-7 deployment model
+# (see ADR-0005 amendment).
+# ---------------------------------------------------------------------
+_hemisphere: Hemisphere = hemisphere_from_env()
+
+
+def get_hemisphere() -> Hemisphere:
+    """Dependency callable used by the comfort router + scheduler."""
+    return _hemisphere
 
 
 # ---------------------------------------------------------------------
@@ -663,6 +682,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             sched.shutdown(wait=False)
         except Exception:  # noqa: BLE001
             log.exception("Forecast scheduler: shutdown raised")
+    comfort_sched = getattr(app.state, "comfort_scheduler", None)
+    if comfort_sched is not None:
+        try:
+            comfort_sched.shutdown(wait=False)
+        except Exception:  # noqa: BLE001
+            log.exception("Comfort scheduler: shutdown raised")
 
 
 async def _await_bootstrap_then_fit(app: FastAPI) -> None:
@@ -689,6 +714,27 @@ async def _await_bootstrap_then_fit(app: FastAPI) -> None:
         return
 
     # `complete` or `skipped` — both mean SensorReadings is populated.
+
+    # ----------------------------------------------------------------
+    # Comfort scheduler (slice 7). Registered eagerly here — it does
+    # NOT depend on the forecaster boot-fit, only on a populated
+    # `SensorReadings` table. Registering it independent of the
+    # forecast scheduler means a forecaster failure does not also
+    # silence the dashboard comfort card.
+    # ----------------------------------------------------------------
+    skip_comfort = os.environ.get(
+        "CLIMASENSE_SKIP_COMFORT_SCHEDULER", ""
+    ).lower() in ("1", "true", "yes")
+    if skip_comfort:
+        log.info(
+            "Comfort scheduler: SKIPPED (CLIMASENSE_SKIP_COMFORT_SCHEDULER)"
+        )
+    else:
+        try:
+            _register_comfort_scheduler(app)
+        except Exception:  # noqa: BLE001
+            log.exception("Comfort scheduler: registration failed")
+
     await asyncio.to_thread(_run_boot_fit_blocking)
 
     if _forecaster_tracker.state != "ready":
@@ -788,12 +834,48 @@ def _register_forecast_scheduler(app: FastAPI) -> None:
     log.info("Forecast scheduler: started (interval=1 min, cadence=1 h)")
 
 
+def _register_comfort_scheduler(app: FastAPI) -> None:
+    """Register the APScheduler interval job that drives β-prime
+    comfort-score emission once per replay-hour.
+
+    Mirrors the slice-5 forecast-scheduler pattern. The scheduler
+    fires every wall-minute; the β-prime gate inside
+    `ComfortEmitter.emit_if_due` selects which ticks actually persist
+    a `ComfortScores` row.
+    """
+    from apscheduler.schedulers.background import BackgroundScheduler
+
+    log = logging.getLogger("climasense_ml.scheduler")
+    emitter = ComfortEmitter(
+        engine=get_engine(),
+        clock_provider=lambda: CursorSnapshot.from_clock(_clock),
+        hemisphere=_hemisphere,
+    )
+
+    scheduler = BackgroundScheduler(daemon=True, timezone="UTC")
+    scheduler.add_job(
+        emitter.emit_if_due,
+        trigger="interval",
+        minutes=1,
+        id="comfort-emit",
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.start()
+    app.state.comfort_scheduler = scheduler
+    app.state.comfort_emitter = emitter
+    log.info(
+        "Comfort scheduler: started (interval=1 min, cadence=1 h, hemisphere=%s)",
+        _hemisphere,
+    )
+
+
 # ---------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------
 app = FastAPI(
     title="ClimaSense.ML",
-    version="0.6.0-slice-6",
+    version="0.7.0-slice-7",
     lifespan=lifespan,
 )
 app.add_middleware(CursorScopeMiddleware)
@@ -801,7 +883,7 @@ app.add_middleware(RequestIdMiddleware)
 
 # Slice 5: real /api/forecast handlers (boot-fit emission). Registered
 # BEFORE the stub router so the stub router only carries the still-
-# pending endpoints (anomalies, profiles, comfort).
+# pending endpoints (anomalies, profiles).
 app.include_router(
     build_forecast_router(
         get_forecaster=get_forecaster,
@@ -810,9 +892,20 @@ app.include_router(
     )
 )
 
+# Slice 7: real /api/comfort/score handler (ASHRAE 55 graphical
+# zone). Registered BEFORE the stub router so the stub router no
+# longer carries comfort.
+app.include_router(
+    build_comfort_router(
+        get_engine=get_engine,
+        get_cursor=get_cursor,
+        get_hemisphere=get_hemisphere,
+    )
+)
+
 # Stub routes for the still-pending contract surface (anomalies /
-# profiles / comfort). Each returns 501 with a `ProblemDetails` body.
-# Slice 5 dropped /api/forecast (now real) from this router.
+# profiles). Slice 5 dropped /api/forecast (now real) from this
+# router; slice 7 dropped /api/comfort/score.
 app.include_router(stubs_router)
 
 

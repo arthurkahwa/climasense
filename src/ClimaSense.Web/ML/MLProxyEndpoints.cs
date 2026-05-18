@@ -221,6 +221,37 @@ public static class MLProxyEndpoints
             }
         });
 
+        // POST /api/ml/run/comfort — slice 7's "Run Comfort" UI path.
+        // Per issue #9: "POST /api/ml/run/comfort proxied by .NET to
+        // FastAPI's GET /api/comfort/score?hours=24". The ml-tier
+        // handler is real (slice 7) and MERGEs into ComfortScores; the
+        // proxy returns the resulting envelope verbatim. Idempotent on
+        // the cursor's bucket (calculator is pure).
+        app.MapPost("/api/ml/run/comfort", async (
+            HttpContext ctx,
+            IMLServiceClient ml,
+            CancellationToken ct,
+            [FromQuery] int? hours) =>
+        {
+            try
+            {
+                var resp = await ml.GetComfortScoreAsync(hours ?? 24, ct).ConfigureAwait(false);
+                return resp is null
+                    ? NotImplemented(ctx, "getComfortScore")
+                    : Results.Ok(resp);
+            }
+            catch (KiotaProblemDetails kpd)
+            {
+                return MapKiotaProblemDetails(ctx, kpd);
+            }
+            catch (Exception ex) when (ex is MLServiceUnavailableException
+                                          or MLServiceBadGatewayException
+                                          or MLServiceTimeoutException)
+            {
+                return MapFailure(ctx, ex);
+            }
+        });
+
         return app;
     }
 

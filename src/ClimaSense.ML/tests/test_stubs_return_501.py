@@ -21,6 +21,8 @@ os.environ.setdefault("CLIMASENSE_SKIP_BOOTSTRAP", "1")
 # Slice 5: skip the lag-LR boot-fit (no DB available in this test).
 os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_FIT", "1")
 os.environ.setdefault("CLIMASENSE_SKIP_FORECAST_SCHEDULER", "1")
+# Slice 7: skip the comfort scheduler (no DB available in this test).
+os.environ.setdefault("CLIMASENSE_SKIP_COMFORT_SCHEDULER", "1")
 
 import pathlib  # noqa: E402
 
@@ -55,6 +57,13 @@ _REAL_ENDPOINTS = {
     # tier populates `dbo.Leaderboard` via `LeaderboardSeeder` at
     # startup; the read SELECT is served by the .NET tier directly.
     ("/api/leaderboard", "get"),
+    # Slice 7: /api/comfort/score is a REAL ml-tier endpoint (ASHRAE
+    # 55 graphical zone scoring + upsert into ComfortScores). Not a
+    # stub anymore.
+    ("/api/comfort/score", "get"),
+    # Slice 7: /api/comfort/current is a .NET web-tier read of the
+    # `dbo.fv_comfortscores_at_cursor` TVF — bypasses the ml tier.
+    ("/api/comfort/current", "get"),
 }
 
 
@@ -119,11 +128,11 @@ def test_contract_endpoint_returns_501(path: str, method: str) -> None:
     # request didn't supply / mint one.
 
 
-def test_at_least_three_stub_endpoints_are_present() -> None:
+def test_at_least_two_stub_endpoints_are_present() -> None:
     """Sanity floor — guards against accidental removal of stub routes.
 
     Slice 5 promoted /api/forecast GET + POST from stubs to real
-    handlers, dropping the floor from 5 to 3 (anomalies, profiles,
-    comfort remain stubbed).
+    handlers; slice 7 promoted /api/comfort/score. Anomalies and
+    profiles remain stubbed.
     """
-    assert len(_stub_routes()) >= 3
+    assert len(_stub_routes()) >= 2
