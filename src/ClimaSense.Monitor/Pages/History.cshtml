@@ -1,0 +1,29 @@
+@page
+@{ ViewData["Title"] = "Verlauf"; }
+<h1>Verlauf</h1>
+<div class="ranges">
+  <button data-r="24h">24 Std</button><button data-r="7d" class="active">7 T</button>
+  <button data-r="30d">30 T</button><button data-r="90d">90 T</button><button data-r="1y">1 J</button>
+  <button data-r="2y">2 J</button><button data-r="5y">5 J</button><button data-r="all">Alle</button>
+  <span class="custom"><input type="date" id="from" /> <input type="date" id="to" /> <button id="applyCustom">Übernehmen</button></span>
+</div>
+<div class="ranges modes">
+  <span class="muted">Anzeige:</span>
+  <button data-mode="avg" class="active">Mittelwerte</button><button data-mode="raw">Messwerte</button>
+</div>
+<div class="panel">
+  <h3 title="Mittelwerte mit Min–Max-Band, oder tatsächliche Messwerte — oben umschaltbar">Temperatur &amp; Luftfeuchtigkeit</h3>
+  <p id="chartNote" class="muted" style="display:none"></p>
+  <canvas id="histChart" height="120"></canvas>
+</div>
+<div class="panel"><h3 title="Ein Feld je Tag, eingefärbt nach Durchschnittstemperatur">Tages-Heatmap (Ø °C)</h3><div id="heatmap" class="heatmap"></div></div>
+<div class="panel"><h3 title="Zusammenhängende Zeiträume außerhalb des empfohlenen Bereichs">Überschreitungen</h3>
+  <table id="excursions">
+    <thead><tr><th>Messgröße</th><th>Beginn</th><th>Ende</th><th>Dauer</th><th>Spitzenwert</th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+@section Scripts {
+  <script src="~/js/charts.js" asp-append-version="true"></script>
+  <script src="~/js/history.js" asp-append-version="true"></script>
+}

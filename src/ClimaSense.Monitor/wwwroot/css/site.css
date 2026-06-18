@@ -1,0 +1,41 @@
+:root { --bg:#0d1117; --panel:#161b22; --fg:#e6edf3; --muted:#8b949e; --green:#2ea043; --amber:#d29922; --red:#f85149; --line:#30363d; }
+:root[data-theme="light"] { --bg:#ffffff; --panel:#f6f8fa; --fg:#1f2328; --muted:#656d76; --green:#1a7f37; --amber:#9a6700; --red:#cf222e; --line:#d0d7de; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 -apple-system,Segoe UI,Roboto,sans-serif; }
+header { display:flex; align-items:center; gap:24px; padding:12px 20px; border-bottom:1px solid var(--line); }
+.brand { font-weight:700; color:var(--fg); text-decoration:none; font-size:18px; }
+nav a { color:var(--muted); text-decoration:none; margin-right:16px; }
+nav a:hover { color:var(--fg); }
+main { padding:20px; max-width:1100px; margin:0 auto; }
+h1 { font-size:22px; }
+.tiles { display:flex; gap:16px; flex-wrap:wrap; }
+.tile { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:20px 24px; min-width:200px; }
+.tile .v { font-size:42px; font-weight:700; }
+.tile .l { color:var(--muted); text-transform:uppercase; font-size:12px; letter-spacing:.05em; }
+.band-Recommended { color:var(--green); } .band-Allowable { color:var(--amber); } .band-OutOfRange { color:var(--red); }
+.banner { background:#3d2b00; border:1px solid var(--amber); color:#ffd479; padding:10px 14px; border-radius:8px; margin:12px 0; display:none; }
+.banner.show { display:block; }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px; margin-top:16px; }
+.ranges button { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:6px 12px; margin-right:6px; cursor:pointer; }
+.ranges button.active { border-color:var(--green); color:var(--green); }
+.ranges .custom { margin-left:8px; }
+.ranges input[type=date] { background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 8px; }
+table { width:100%; border-collapse:collapse; }
+th,td { text-align:left; padding:8px; border-bottom:1px solid var(--line); }
+.heatmap { display:grid; grid-template-columns:repeat(auto-fill,12px); gap:2px; }
+.heatmap .cell { width:12px; height:12px; border-radius:2px; background:#21262d; }
+.muted { color:var(--muted); }
+.alert { padding:8px 12px; border-radius:6px; margin:6px 0; border:1px solid var(--line); background:var(--bg); }
+.theme-toggle { margin-left:auto; background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:5px 10px; cursor:pointer; font-size:16px; }
+:root[data-theme="light"] .banner { background:#fff8c5; border-color:var(--amber); color:#7d4e00; }
+:root[data-theme="light"] .heatmap .cell { background:#eaeef2; }
+.chart-wrap { position:relative; cursor:crosshair; }
+.zoom-box { position:absolute; display:none; border:1px solid var(--fg); background:rgba(88,166,255,.18); pointer-events:none; z-index:5; }
+.zoom-reset { position:absolute; top:8px; right:8px; z-index:6; background:var(--panel); color:var(--fg); border:1px solid var(--line); border-radius:6px; padding:4px 10px; font-size:13px; cursor:pointer; opacity:.9; }
+.zoom-reset:hover { opacity:1; border-color:var(--green); color:var(--green); }
+.ranges.modes { margin-top:10px; }
+.ranges.modes .muted { margin-right:6px; }
+/* Embedded API reference (Pages/Docs). Fixed to the viewport so Redoc gets the
+   full width; top/height default here and are fine-tuned to the real header
+   height by the page script. */
+.docs-frame { position:fixed; top:53px; left:0; right:0; width:100%; height:calc(100vh - 53px); border:0; background:#ffffff; }

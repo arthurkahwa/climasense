@@ -1,0 +1,18 @@
+@page
+@{ ViewData["Title"] = "Live"; }
+<h1>Live — USV-Raum</h1>
+<div id="stale" class="banner"></div>
+<div class="tiles">
+  <div class="tile" title="Aktuelle Temperatur im Raum"><div class="l">Temperatur</div><div id="temp" class="v">—</div></div>
+  <div class="tile" title="Aktuelle relative Luftfeuchtigkeit"><div class="l">Luftfeuchtigkeit</div><div id="hum" class="v">—</div></div>
+</div>
+<p id="updated" class="muted">—</p>
+<div class="panel"><h3>Aktive Warnungen</h3><div id="alerts"></div></div>
+<div class="panel">
+  <h3 title="Tatsächliche Messwerte der letzten 24 Stunden">Verlauf — letzte 24 Stunden</h3>
+  <canvas id="liveChart" height="120"></canvas>
+</div>
+@section Scripts {
+  <script src="~/js/charts.js" asp-append-version="true"></script>
+  <script src="~/js/live.js" asp-append-version="true"></script>
+}

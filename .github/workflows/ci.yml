@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs for the same ref so a force-push doesn't queue
+# stale CI. Both interpolations are safe inputs (workflow name + git ref).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: .NET tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up .NET 10 SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore ClimaSense.sln
+
+      - name: Build
+        run: dotnet build ClimaSense.sln -c Release --no-restore
+
+      - name: Test
+        # The 3 DB-integration tests are opt-in (Xunit.SkippableFact gated on
+        # CLIMASENSE_UPS3_CONNECTION); with no connection string set they skip,
+        # so CI needs no database.
+        run: dotnet test ClimaSense.sln -c Release --no-build --verbosity normal

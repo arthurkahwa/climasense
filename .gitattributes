@@ -1,0 +1,2 @@
+# Disable Git's automatic line-ending conversion for all files
+* -text

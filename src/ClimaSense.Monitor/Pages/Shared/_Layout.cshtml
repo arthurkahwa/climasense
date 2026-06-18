@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] · ClimaSense</title>
+    <script>document.documentElement.dataset.theme = localStorage.getItem('theme') || 'dark';</script>
+    <script>window.deNum = (n, d = 1) => Number(n).toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d });</script>
+    <script>window.appBase = "@Context.Request.PathBase.Value";</script>
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <script src="~/lib/chartjs/chart.umd.min.js" asp-append-version="true"></script>
+</head>
+<body>
+    <header>
+        <a class="brand" href="~/">ClimaSense</a>
+        <nav><a href="~/">Live</a><a href="~/history">Verlauf</a><a href="~/insights">Analyse</a><a href="~/docs">API</a></nav>
+        <button id="themeToggle" class="theme-toggle" type="button" title="Hell/Dunkel umschalten" aria-label="Hell/Dunkel umschalten">🌓</button>
+    </header>
+    <main>@RenderBody()</main>
+    <script src="~/js/theme.js" asp-append-version="true"></script>
+    @await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

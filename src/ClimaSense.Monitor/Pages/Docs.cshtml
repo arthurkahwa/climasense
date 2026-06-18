@@ -1,0 +1,31 @@
+@page
+@{ ViewData["Title"] = "API-Dokumentation"; }
+@*
+  Embeds the generated Redoc reference (wwwroot/api.html, produced from
+  openapi.yaml by scripts/build-api-html.py) full-bleed below the app header.
+  The iframe has a CSS fallback height; the script trims it to the exact header
+  height so there is no gap or overlap regardless of theme or zoom.
+*@
+<iframe id="apiDocs" class="docs-frame" src="@Url.Content("~/api.html")" title="ClimaSense API-Referenz"></iframe>
+<noscript>
+  <p class="muted" style="padding:20px;">
+    Die eingebettete API-Referenz benötigt JavaScript.
+    <a href="@Url.Content("~/api.html")">Direkt öffnen</a> ·
+    <a href="/openapi.yaml">openapi.yaml</a>
+  </p>
+</noscript>
+@section Scripts {
+  <script>
+    (function () {
+      var frame = document.getElementById('apiDocs');
+      var header = document.querySelector('header');
+      function fit() {
+        var h = header ? header.getBoundingClientRect().height : 53;
+        frame.style.top = h + 'px';
+        frame.style.height = (window.innerHeight - h) + 'px';
+      }
+      fit();
+      window.addEventListener('resize', fit);
+    })();
+  </script>
+}

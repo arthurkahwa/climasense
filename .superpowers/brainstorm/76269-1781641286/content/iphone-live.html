@@ -1,0 +1,76 @@
+<h2>📱 iPhone — “Live” screen</h2>
+<p class="subtitle">Two directions for the anchor screen (same data, so compare the layout). Click to choose, or tell me in the terminal.</p>
+
+<style>
+  .ph { width: 230px; height: 470px; border-radius: 30px; background:#0d1117; border:6px solid #21262d;
+        padding:14px 12px; color:#e6edf3; font:13px/1.4 -apple-system,Segoe UI,sans-serif; box-shadow:0 8px 30px rgba(0,0,0,.4); }
+  .ph .nav { display:flex; align-items:center; justify-content:space-between; font-weight:700; font-size:15px; margin-bottom:10px; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .g{background:#2ea043;} .a{background:#d29922;} .r{background:#f85149;}
+  .tile { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:10px; flex:1; }
+  .tile .l { color:#8b949e; font-size:10px; text-transform:uppercase; letter-spacing:.04em; }
+  .tile .v { font-size:30px; font-weight:800; line-height:1.1; }
+  .tile .s { font-size:11px; }
+  .row { display:flex; gap:8px; }
+  .muted { color:#8b949e; font-size:11px; margin:8px 0; }
+  .chart { background:#161b22; border:1px solid #30363d; border-radius:12px; padding:8px; margin-top:4px; }
+  .sec { font-weight:700; font-size:12px; margin:12px 0 6px; }
+  .alert { background:#161b22; border:1px solid #30363d; border-left:3px solid #2ea043; border-radius:8px; padding:7px 9px; font-size:11px; }
+  .hero { border-radius:16px; padding:16px; text-align:center; border:1px solid #2ea043; background:linear-gradient(180deg,rgba(46,160,67,.18),rgba(46,160,67,.04)); }
+  .hero .badge { font-size:12px; color:#2ea043; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
+  .hero .big { font-size:46px; font-weight:800; margin:4px 0; }
+  .hero .sub { color:#cdd6df; font-size:13px; }
+  .green-t{color:#2ea043;}
+</style>
+
+<div class="cards">
+  <!-- A: Tiles + trend -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="display:flex;justify-content:center;padding:18px;background:#0a0c10;">
+      <div class="ph">
+        <div class="nav"><span>ClimaSense</span> <span class="dot g" title="verbunden"></span></div>
+        <div class="row">
+          <div class="tile"><div class="l">Temperatur</div><div class="v green-t">21°</div><div class="s green-t">Normal</div></div>
+          <div class="tile"><div class="l">Feuchte</div><div class="v green-t">47<span style="font-size:16px">%</span></div><div class="s green-t">Normal</div></div>
+        </div>
+        <div class="muted">aktualisiert vor 4 Min</div>
+        <div class="chart">
+          <div class="l" style="color:#8b949e;font-size:10px;">24 Std</div>
+          <svg viewBox="0 0 200 56" width="100%" height="56">
+            <polyline points="0,30 28,32 56,28 84,34 112,29 140,31 168,26 200,28" fill="none" stroke="#2ea043" stroke-width="2"/>
+            <polyline points="0,44 28,42 56,45 84,40 112,43 140,41 168,46 200,43" fill="none" stroke="#58a6ff" stroke-width="2" opacity=".8"/>
+          </svg>
+        </div>
+        <div class="sec">Aktive Warnungen</div>
+        <div class="alert">✓ Keine — alles im Normbereich</div>
+      </div>
+    </div>
+    <div class="card-body"><h3>A · Tiles + trend</h3><p>Two band-coloured tiles, freshness line, 24 h sparkline, alerts list. Faithful to the web Live page; dense and scannable.</p></div>
+  </div>
+
+  <!-- B: Hero status -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="display:flex;justify-content:center;padding:18px;background:#0a0c10;">
+      <div class="ph">
+        <div class="nav"><span>ClimaSense</span> <span class="dot g"></span></div>
+        <div class="hero">
+          <div class="badge">Gesamtstatus · Normal</div>
+          <div class="big green-t">21°</div>
+          <div class="sub">Feuchte 47 % · Taupunkt 9,4 °C</div>
+        </div>
+        <div class="muted" style="text-align:center;">aktualisiert vor 4 Min</div>
+        <div class="chart">
+          <svg viewBox="0 0 200 50" width="100%" height="50">
+            <polyline points="0,28 28,30 56,26 84,32 112,27 140,29 168,24 200,26" fill="none" stroke="#2ea043" stroke-width="2"/>
+            <polyline points="0,40 28,38 56,41 84,36 112,39 140,37 168,42 200,39" fill="none" stroke="#58a6ff" stroke-width="2" opacity=".8"/>
+          </svg>
+        </div>
+        <div class="sec">Aktive Warnungen</div>
+        <div class="alert">✓ Keine</div>
+      </div>
+    </div>
+    <div class="card-body"><h3>B · Hero status</h3><p>One big band-coloured “overall” hero that turns amber/red on breach, with temp/humidity/dew-point beneath. Bolder, more distinctive for the portfolio.</p></div>
+  </div>
+</div>
+
+<p class="subtitle">Band colours: <span class="green-t">■ Normal</span> · <span style="color:#d29922">■ Zulässig</span> · <span style="color:#f85149">■ Kritisch</span> — the tiles/hero recolour with status.</p>

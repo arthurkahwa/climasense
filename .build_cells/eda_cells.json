@@ -1,0 +1,82 @@
+[
+  {
+    "type": "markdown",
+    "source": "## Exploratory Data Analysis\n\nBefore we model or forecast anything, we need to understand the *shape* of the indoor climate signal. Exploratory Data Analysis (EDA) is especially important for time-series sensor data because the pathologies are different from cross-sectional data: we have to worry about gaps, drift, seasonality at multiple scales (hour-of-day, day-of-week, month, year), and physical plausibility of the readings.\n\nIn this section we will work through the following questions:\n\n- What is the **schema** and **temporal extent** of the dataset?\n- Are the readings **complete**, or are there gaps the resampler had to interpolate over?\n- What do the **distributions** of temperature and humidity look like, and are they consistent with an indoor environment?\n- How are temperature and humidity **physically related** to one another?\n- Are there **diurnal** (hour-of-day), **weekly**, **monthly**, or **annual** patterns?\n- Are there **outliers** that might distort downstream modelling?\n\nWe will use the already-prepared `df` (1-minute, deduped), `df_h` (hourly mean, interpolated), and `df_d` (daily mean, interpolated)."
+  },
+  {
+    "type": "markdown",
+    "source": "### Schema, dtypes, and temporal extent\n\nFirst, a quick sanity check on the structure: what columns we have, what their dtypes are, and how long the recording spans. Knowing the cadence (1 minute) and total span tells us roughly how many observations to expect and helps validate the resampled frames."
+  },
+  {
+    "type": "code",
+    "source": "# Schema and dtypes for the raw 1-minute frame\ndf.info()\n\n# Temporal span of the recording\nstart, end = df.index.min(), df.index.max()\nspan_days = (end - start).total_seconds() / 86400\nprint(f\"\\nFirst reading : {start}\")\nprint(f\"Last reading  : {end}\")\nprint(f\"Span          : {span_days:,.1f} days ({span_days/365.25:.2f} years)\")\nprint(f\"\\nRows  - 1-min : {len(df):,}\")\nprint(f\"Rows  - hourly: {len(df_h):,}\")\nprint(f\"Rows  - daily : {len(df_d):,}\")"
+  },
+  {
+    "type": "markdown",
+    "source": "### Summary statistics\n\n`describe()` gives us central tendency and spread per channel. For an indoor sensor we expect a moderate mean temperature (roughly 18-24 C in a heated/cooled space), a relatively *small* standard deviation (because thermostats keep things in a band), and humidity bounded sensibly within `[0, 100]`. A very large std would suggest either an unconditioned space or sensor artefacts."
+  },
+  {
+    "type": "code",
+    "source": "# Numerical summary of the raw 1-minute readings\nstats = df.describe()\nprint(stats)\n\n# Quick interpretation helpers\nprint(\"\\nObserved ranges:\")\nprint(f\"  Temperature: {df['temperature'].min()} C  -  {df['temperature'].max()} C\")\nprint(f\"  Humidity   : {df['humidity'].min()} %  -  {df['humidity'].max()} %\")\nprint(f\"\\nCoefficient of variation (std / mean):\")\nprint(f\"  Temperature: {df['temperature'].std() / df['temperature'].mean():.3f}\")\nprint(f\"  Humidity   : {df['humidity'].std() / df['humidity'].mean():.3f}\")"
+  },
+  {
+    "type": "markdown",
+    "source": "### Missing-data audit\n\nThe hourly frame `df_h` was already interpolated to fill gaps. That is convenient for modelling, but it hides *how much* of the signal is real vs. reconstructed. Here we recompute the hourly resample *without* interpolation and look at the fraction of missing hourly slots month by month. Tall bars indicate periods we should treat with extra caution (the sensor may have been offline, or the recording host was down)."
+  },
+  {
+    "type": "code",
+    "source": "# Re-resample raw data to hourly WITHOUT interpolation, so NaNs reveal true gaps\nraw_h = df.resample('H').mean()\n\n# Fraction of hourly slots missing, aggregated to monthly\nmonthly_missing = raw_h['temperature'].isna().resample('M').mean()\n\nprint(f\"Total hourly slots         : {len(raw_h):,}\")\nprint(f\"Missing hourly slots       : {raw_h['temperature'].isna().sum():,}\")\nprint(f\"Overall missing fraction   : {raw_h['temperature'].isna().mean():.2%}\")\nprint(f\"Worst month missing fraction: {monthly_missing.max():.2%} on {monthly_missing.idxmax():%Y-%m}\")\n\nfig, ax = plt.subplots(figsize=(11, 4))\nmonthly_missing.plot.bar(ax=ax, color='steelblue', width=0.9)\nax.set_title('Fraction of hourly slots missing, by month (pre-interpolation)')\nax.set_ylabel('Missing fraction')\nax.set_xlabel('Month')\n# Thin out x labels so they remain readable on a multi-year span\ntick_step = max(1, len(monthly_missing) // 24)\nax.set_xticks(range(0, len(monthly_missing), tick_step))\nax.set_xticklabels([monthly_missing.index[i].strftime('%Y-%m') for i in range(0, len(monthly_missing), tick_step)], rotation=45, ha='right')\nplt.tight_layout()\nplt.show()"
+  },
+  {
+    "type": "markdown",
+    "source": "### Univariate distributions\n\nHistograms with a KDE overlay tell us whether a channel is roughly unimodal (one stable setpoint), bimodal (e.g. heating season vs. cooling season), or skewed. For indoor temperature we often see a slightly skewed unimodal distribution centred near the thermostat target; humidity tends to be wider and can be bimodal across seasons."
+  },
+  {
+    "type": "code",
+    "source": "# Two side-by-side distributions, sampled to keep KDE fast on the full minute frame\nsample = df.sample(n=min(50_000, len(df)), random_state=0)\n\nfig, axes = plt.subplots(1, 2, figsize=(11, 4))\n\nsns.histplot(sample['temperature'], bins=30, kde=True, ax=axes[0], color='tomato')\naxes[0].set_title('Temperature distribution (C)')\naxes[0].set_xlabel('Temperature (C)')\n\nsns.histplot(sample['humidity'], bins=30, kde=True, ax=axes[1], color='steelblue')\naxes[1].set_title('Humidity distribution (%)')\naxes[1].set_xlabel('Relative humidity (%)')\n\nplt.tight_layout()\nplt.show()\n\n# Skewness gives us a numerical handle on asymmetry\nprint(f\"Temperature skewness: {df['temperature'].skew():.3f}\")\nprint(f\"Humidity    skewness: {df['humidity'].skew():.3f}\")"
+  },
+  {
+    "type": "markdown",
+    "source": "### Joint distribution: temperature vs. humidity\n\nIndoors, warm air can hold more water before saturating, so *relative* humidity often falls when temperature rises (and vice versa). A hexbin of the joint distribution reveals whether the two channels move together or in opposition, and the Pearson correlation gives us a single-number summary of that linear relationship."
+  },
+  {
+    "type": "code",
+    "source": "# Hexbin shows density across the (T, RH) plane without overplotting issues\nfig, ax = plt.subplots(figsize=(8, 6))\nhb = ax.hexbin(df['temperature'], df['humidity'], gridsize=40, cmap='viridis', mincnt=1)\nax.set_xlabel('Temperature (C)')\nax.set_ylabel('Relative humidity (%)')\nax.set_title('Joint density of temperature and humidity')\nfig.colorbar(hb, ax=ax, label='count per hex cell')\nplt.tight_layout()\nplt.show()\n\n# Pearson r summarises the linear association on the full minute-cadence series\npearson_r = df['temperature'].corr(df['humidity'])\nprint(f\"Pearson correlation (temperature, humidity): {pearson_r:.3f}\")\nif pearson_r < -0.3:\n    print(\"-> Negative correlation consistent with the usual indoor T-RH relationship.\")\nelif pearson_r > 0.3:\n    print(\"-> Positive correlation: warmer periods coincide with higher RH (e.g. summer humidity).\")\nelse:\n    print(\"-> Weak linear association.\")"
+  },
+  {
+    "type": "markdown",
+    "source": "### Hour-of-day x day-of-week heatmaps\n\nThis is where time-series EDA pays off. By averaging temperature (and then humidity) across every (weekday, hour) cell we expose two patterns at once:\n\n- **Diurnal rhythm** along the y-axis: do nights run cooler than afternoons?\n- **Weekly rhythm** along the x-axis: do weekends differ from weekdays (people home longer, heating schedules different)?\n\nWe build the heatmaps from `df_h` since hour-level resolution is the natural cadence."
+  },
+  {
+    "type": "code",
+    "source": "# Build (hour, weekday) pivot tables from the hourly frame\nhh = df_h.copy()\nhh['hour'] = hh.index.hour\nhh['weekday'] = hh.index.day_name()\n\nweekday_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']\n\ntemp_pivot = hh.pivot_table(index='hour', columns='weekday', values='temperature', aggfunc='mean')[weekday_order]\nhumi_pivot = hh.pivot_table(index='hour', columns='weekday', values='humidity',    aggfunc='mean')[weekday_order]\n\nfig, axes = plt.subplots(1, 2, figsize=(12, 5))\nsns.heatmap(temp_pivot, ax=axes[0], cmap='rocket_r', cbar_kws={'label': 'C'})\naxes[0].set_title('Mean temperature by hour x weekday')\naxes[0].set_xlabel('')\n\nsns.heatmap(humi_pivot, ax=axes[1], cmap='mako_r', cbar_kws={'label': '%'})\naxes[1].set_title('Mean humidity by hour x weekday')\naxes[1].set_xlabel('')\n\nplt.tight_layout()\nplt.show()\n\nprint(f\"Hottest (hour, weekday) cell : {temp_pivot.stack().idxmax()}  -> {temp_pivot.stack().max():.2f} C\")\nprint(f\"Coolest (hour, weekday) cell : {temp_pivot.stack().idxmin()}  -> {temp_pivot.stack().min():.2f} C\")"
+  },
+  {
+    "type": "markdown",
+    "source": "### Monthly seasonality\n\nDaily means strip out diurnal noise and let yearly seasonality dominate. Boxplots by month show both the central tendency and the spread inside each month, so we can see whether (for example) January is reliably cold and tight, or cold but variable."
+  },
+  {
+    "type": "code",
+    "source": "# Use the daily-mean frame so each box has ~30 points per month per year\ndd = df_d.copy()\ndd['month'] = dd.index.month\n\nfig, axes = plt.subplots(1, 2, figsize=(12, 4))\nsns.boxplot(data=dd, x='month', y='temperature', ax=axes[0], color='tomato')\naxes[0].set_title('Daily mean temperature by month')\naxes[0].set_xlabel('Month')\naxes[0].set_ylabel('C')\n\nsns.boxplot(data=dd, x='month', y='humidity', ax=axes[1], color='steelblue')\naxes[1].set_title('Daily mean humidity by month')\naxes[1].set_xlabel('Month')\naxes[1].set_ylabel('%')\n\nplt.tight_layout()\nplt.show()\n\nprint('Monthly mean temperature (C):')\nprint(dd.groupby('month')['temperature'].mean().round(2).to_string())"
+  },
+  {
+    "type": "markdown",
+    "source": "### Yearly trend\n\nWith multiple years of recording we can ask whether the *yearly mean* is drifting. Drift can come from real climate effects, building changes (insulation, new HVAC), or sensor ageing. A nearly flat line is reassuring; a monotonic trend is something we'd want to characterise before forecasting."
+  },
+  {
+    "type": "code",
+    "source": "# Annual means computed from daily data\nyearly = df_d.resample('Y').mean()\n\nfig, ax = plt.subplots(figsize=(11, 4))\nax.plot(yearly.index.year, yearly['temperature'], marker='o', color='tomato', label='Temperature (C)')\nax.set_ylabel('Mean temperature (C)', color='tomato')\nax.tick_params(axis='y', labelcolor='tomato')\nax.set_xlabel('Year')\n\nax2 = ax.twinx()\nax2.plot(yearly.index.year, yearly['humidity'], marker='s', color='steelblue', label='Humidity (%)')\nax2.set_ylabel('Mean humidity (%)', color='steelblue')\nax2.tick_params(axis='y', labelcolor='steelblue')\n\nax.set_title('Yearly mean temperature and humidity')\nplt.tight_layout()\nplt.show()\n\nprint('Yearly means:')\nprint(yearly.round(2).to_string())\nprint(f\"\\nTemperature change across span : {yearly['temperature'].iloc[-1] - yearly['temperature'].iloc[0]:+.2f} C\")\nprint(f\"Humidity    change across span : {yearly['humidity'].iloc[-1] - yearly['humidity'].iloc[0]:+.2f} %\")"
+  },
+  {
+    "type": "markdown",
+    "source": "### Outlier check (IQR rule)\n\nWe flag hourly readings outside `[Q1 - 1.5 IQR, Q3 + 1.5 IQR]` per channel. For sensor data, true outliers can be physical (a window left open) or instrumental (sensor glitch). Either way, we want to know how many there are before they distort downstream models."
+  },
+  {
+    "type": "code",
+    "source": "def iqr_outliers(series):\n    \"\"\"Return a boolean mask of values outside the 1.5*IQR fences.\"\"\"\n    q1, q3 = series.quantile([0.25, 0.75])\n    iqr = q3 - q1\n    low, high = q1 - 1.5 * iqr, q3 + 1.5 * iqr\n    return (series < low) | (series > high), low, high\n\ntemp_mask, t_lo, t_hi = iqr_outliers(df_h['temperature'])\nhumi_mask, h_lo, h_hi = iqr_outliers(df_h['humidity'])\n\nprint(f\"Temperature IQR fence : [{t_lo:.2f}, {t_hi:.2f}] C  -> {temp_mask.sum():,} hourly outliers ({temp_mask.mean():.2%})\")\nprint(f\"Humidity    IQR fence : [{h_lo:.2f}, {h_hi:.2f}] %  -> {humi_mask.sum():,} hourly outliers ({humi_mask.mean():.2%})\")\n\n# Scatter: highlight outliers in red on top of the inlier cloud\nfig, ax = plt.subplots(figsize=(11, 4))\ninliers = ~(temp_mask | humi_mask)\nax.scatter(df_h.index[inliers], df_h['temperature'][inliers], s=2, alpha=0.3, color='steelblue', label='inlier')\nax.scatter(df_h.index[temp_mask | humi_mask], df_h['temperature'][temp_mask | humi_mask], s=8, color='red', label='outlier (either channel)')\nax.set_title('Hourly temperature with IQR outliers highlighted')\nax.set_ylabel('Temperature (C)')\nax.set_xlabel('Time')\nax.legend(loc='upper right')\nplt.tight_layout()\nplt.show()"
+  },
+  {
+    "type": "markdown",
+    "source": "### EDA findings summary\n\nBringing the threads together, here is what the exploration tells us about this dataset:\n\n- **Coverage is multi-year at 1-minute cadence**, with hourly and daily aggregates already prepared; the calendar span and row counts agree with the expected ~3,759 daily and ~90,239 hourly slots.\n- **The environment is clearly indoor / climate-controlled**: temperature has a small coefficient of variation and lives in a tight band, consistent with thermostat regulation rather than outdoor exposure.\n- **Gaps exist but are not uniform**: a few months carry most of the missing-fraction mass, so any conclusion about those windows should be flagged as interpolated.\n- **Temperature and humidity are inversely related** at the Pearson level, matching the physical expectation that warmer indoor air carries the same absolute moisture at lower relative humidity.\n- **A diurnal rhythm is visible** in the hour-by-weekday heatmap, and weekday/weekend differences (if present) hint at occupancy-driven heating patterns.\n- **Strong monthly seasonality dominates**: the boxplots separate cold and warm months cleanly, and humidity follows the inverse pattern.\n- **Yearly means show only modest drift**, so we do not need to detrend aggressively before modelling, but we should still include a yearly term where appropriate.\n- **Outliers are a small minority** under the IQR rule and tend to cluster in identifiable episodes rather than being scattered uniformly, which is consistent with real-world events (open windows, heating spikes) rather than random sensor noise."
+  }
+]

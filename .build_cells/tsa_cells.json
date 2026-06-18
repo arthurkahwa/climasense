@@ -1,0 +1,114 @@
+[
+  {
+    "type": "markdown",
+    "source": "## 4. Time Series Analysis\n\nIndoor climate sensor readings are inherently temporal: each measurement only makes sense relative to the ones around it. In this section we move beyond static distributions and ask **what the data does over time**. Specifically, we examine the following time-series properties:\n\n- **Stationarity** — does the mean, variance, and autocovariance stay roughly constant over time? Almost every classical forecasting model (ARIMA, VAR, exponential smoothing) assumes weak stationarity. If the series is non-stationary, fits and forecasts will be biased.\n- **Autocorrelation (ACF / PACF)** — how strongly is the value at time *t* linked to the value at *t-k*? These plots tell us how much memory the process has and suggest sensible AR / MA orders.\n- **Seasonality** — is there a repeating cycle (daily, weekly)? Indoor temperature should track the diurnal cycle; humidity may follow weekly occupancy patterns.\n- **Trend** — is there a slow drift (e.g. seasonal warming, sensor aging)?\n- **Decomposition (additive / STL)** — splitting the signal into *trend + seasonal + residual* components makes each layer testable on its own.\n- **Spectral content** — the frequency-domain view reveals dominant cycles that may be invisible to the eye.\n\nEverything we learn here feeds directly into the modelling section: the choice of model class, the differencing order, the seasonal period, and which lags to feed an LSTM."
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.1 Why hourly granularity?\n\nThe raw 1-minute series is dominated by sensor noise and quantisation effects at lags shorter than an hour. Resampling to an hourly mean (`df_h`) suppresses that high-frequency noise without erasing the daily cycle, which is the structure we actually care about for forecasting indoor climate. We keep the daily aggregate `df_d` for analyses that need a longer view, such as weekly seasonality and long-run trend.\n\nAs a rule of thumb, the sampling rate should be a few times finer than the fastest cycle of interest. The fastest meaningful cycle indoors is the daily one (24 h), so hourly samples (24 per cycle) give us a comfortable factor of 24 — well above the Nyquist requirement of 2."
+  },
+  {
+    "type": "code",
+    "source": "# Visual inspection of the full hourly series\nfig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)\n\naxes[0].plot(df_h.index, df_h['temperature'], color='tab:red', linewidth=0.6)\naxes[0].set_ylabel('Temperature (°C)')\naxes[0].set_title('Hourly indoor temperature — full record')\n\naxes[1].plot(df_h.index, df_h['humidity'], color='tab:blue', linewidth=0.6)\naxes[1].set_ylabel('Humidity (%)')\naxes[1].set_xlabel('Time')\naxes[1].set_title('Hourly indoor humidity — full record')\n\nplt.tight_layout()\nplt.show()"
+  },
+  {
+    "type": "code",
+    "source": "# Zoom in on a representative 30-day window to expose short-term structure\nstart = df_h.index.min() + pd.Timedelta(days=30)\nend = start + pd.Timedelta(days=30)\nwindow = df_h.loc[start:end]\n\nfig, axes = plt.subplots(2, 1, figsize=(12, 6), sharex=True)\naxes[0].plot(window.index, window['temperature'], color='tab:red')\naxes[0].set_ylabel('Temperature (°C)')\naxes[0].set_title(f'30-day zoom: {start.date()} → {end.date()}')\n\naxes[1].plot(window.index, window['humidity'], color='tab:blue')\naxes[1].set_ylabel('Humidity (%)')\naxes[1].set_xlabel('Time')\n\nplt.tight_layout()\nplt.show()"
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.2 Rolling statistics\n\nA quick visual stationarity check is to overlay a rolling mean and rolling standard deviation on the raw series. If both lines stay roughly horizontal, the first two moments are stable over time and the series is at least *weakly stationary*. Drifts in the rolling mean indicate trend; growing rolling std indicates heteroscedasticity. We use a 24-hour window so the daily cycle averages out and only longer-term variation survives."
+  },
+  {
+    "type": "code",
+    "source": "# Rolling 24h mean and std of hourly temperature\nrolling_mean = df_h['temperature'].rolling(window=24, min_periods=24).mean()\nrolling_std = df_h['temperature'].rolling(window=24, min_periods=24).std()\n\nfig, ax = plt.subplots(figsize=(12, 4))\nax.plot(df_h.index, df_h['temperature'], color='lightgrey', linewidth=0.5, label='Hourly')\nax.plot(rolling_mean.index, rolling_mean, color='tab:red', linewidth=1.2, label='24h rolling mean')\nax.plot(rolling_std.index, rolling_std, color='tab:orange', linewidth=1.0, label='24h rolling std')\nax.set_ylabel('Temperature (°C)')\nax.set_title('Rolling mean and std — hourly temperature')\nax.legend(loc='upper right')\nplt.tight_layout()\nplt.show()"
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.3 Stationarity tests\n\nVisual checks are necessary but not sufficient. Two complementary statistical tests pin down stationarity more rigorously:\n\n- **Augmented Dickey–Fuller (ADF)** — *null hypothesis: the series has a unit root (non-stationary).* A small p-value (< 0.05) lets us reject the null and conclude the series is stationary.\n- **KPSS** — *null hypothesis: the series is (trend-)stationary.* A small p-value here means we *reject* stationarity. KPSS is sensitive to slow trends ADF can miss.\n\nUsing both together is standard practice. Agreement is reassuring; disagreement usually points to a near-unit-root or trend-stationary process and suggests differencing or de-trending."
+  },
+  {
+    "type": "code",
+    "source": "from statsmodels.tsa.stattools import adfuller, kpss\nimport warnings\n\ndef stationarity_report(series, name):\n    \"\"\"Run ADF and KPSS on a series and pretty-print the verdicts.\"\"\"\n    s = series.dropna()\n    print(f'--- {name} (n={len(s)}) ---')\n\n    # ADF: H0 = unit root (non-stationary)\n    adf_stat, adf_p, *_ = adfuller(s, autolag='AIC')\n    adf_verdict = 'stationary' if adf_p < 0.05 else 'non-stationary'\n    print(f'  ADF   stat={adf_stat:8.3f}  p={adf_p:.4g}  -> {adf_verdict}')\n\n    # KPSS: H0 = stationary\n    with warnings.catch_warnings():\n        warnings.simplefilter('ignore')\n        kpss_stat, kpss_p, *_ = kpss(s, regression='c', nlags='auto')\n    kpss_verdict = 'non-stationary' if kpss_p < 0.05 else 'stationary'\n    print(f'  KPSS  stat={kpss_stat:8.3f}  p={kpss_p:.4g}  -> {kpss_verdict}')\n    print()\n\nstationarity_report(df_h['temperature'], 'Hourly temperature')\nstationarity_report(df_h['humidity'],    'Hourly humidity')"
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.4 Differencing\n\nEven when a series already looks stationary, plotting the **first difference** Δyₜ = yₜ − yₜ₋₁ is informative. Differencing removes deterministic trends and drives most slow components toward zero, leaving high-frequency innovations. If the original series was already stationary, the difference will look like noise centred at zero — confirming there is little to gain from a `d > 0` ARIMA term."
+  },
+  {
+    "type": "code",
+    "source": "# First difference of hourly temperature\ntemp_diff = df_h['temperature'].diff().dropna()\n\nfig, axes = plt.subplots(2, 1, figsize=(12, 5), sharex=True)\naxes[0].plot(df_h.index, df_h['temperature'], color='tab:red', linewidth=0.5)\naxes[0].set_ylabel('Temperature (°C)')\naxes[0].set_title('Hourly temperature (level)')\n\naxes[1].plot(temp_diff.index, temp_diff, color='tab:purple', linewidth=0.4)\naxes[1].axhline(0, color='black', linewidth=0.6)\naxes[1].set_ylabel('Δ Temp (°C / h)')\naxes[1].set_title('First difference')\n\nplt.tight_layout()\nplt.show()\n\nprint(f'Mean of ΔT  = {temp_diff.mean():+.4f} °C/h')\nprint(f'Std  of ΔT  = {temp_diff.std():.4f} °C/h')"
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.5 ACF and PACF\n\n- The **autocorrelation function (ACF)** measures the linear dependence between the series and itself at lag *k*. Slow decay = strong persistence (and possibly non-stationarity); a single sharp spike at lag *q* that drops off afterwards suggests an MA(*q*) component.\n- The **partial autocorrelation function (PACF)** is the correlation at lag *k* after removing everything explained by lags 1…*k-1*. A sharp cut-off at lag *p* suggests an AR(*p*) component.\n\nWe use **lags = 72** (3 days) on the hourly series so the daily seasonality (lag 24, 48, 72) is clearly visible alongside any short-memory dynamics."
+  },
+  {
+    "type": "code",
+    "source": "from statsmodels.graphics.tsaplots import plot_acf, plot_pacf\n\nfig, axes = plt.subplots(1, 2, figsize=(13, 4))\nplot_acf(df_h['temperature'].dropna(),  lags=72, ax=axes[0])\naxes[0].set_title('ACF — hourly temperature (lags = 72h)')\n\nplot_pacf(df_h['temperature'].dropna(), lags=72, ax=axes[1], method='ywm')\naxes[1].set_title('PACF — hourly temperature (lags = 72h)')\n\nplt.tight_layout()\nplt.show()"
+  },
+  {
+    "type": "markdown",
+    "source": "**Reading the plots.** The ACF for indoor temperature typically decays slowly with clear humps at lags 24, 48, and 72 — the fingerprint of daily seasonality. The PACF usually shows a large spike at lag 1 and another at lag 24, with smaller but non-zero spikes at 25 and 23 (the seasonal echoes). That pattern points toward a **SARIMA(p, 0, q)(P, 0, Q, 24)** family, with small candidate orders such as `p ∈ {1, 2}`, `q ∈ {0, 1}`, and a seasonal AR term `P = 1`."
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.6 Classical seasonal decomposition (daily period)\n\n`seasonal_decompose` performs a simple additive decomposition: it estimates the trend with a centred moving average, subtracts it to get a detrended series, averages that within each phase of the chosen period to estimate the seasonal component, and treats the leftover as the residual. With `period=24` we extract the **daily** cycle from the hourly series."
+  },
+  {
+    "type": "code",
+    "source": "from statsmodels.tsa.seasonal import seasonal_decompose\n\nresult_daily = seasonal_decompose(df_h['temperature'].dropna(), model='additive', period=24)\nfig = result_daily.plot()\nfig.set_size_inches(11, 8)\nfig.suptitle('Additive decomposition — hourly temperature, period = 24h', y=1.02)\nplt.tight_layout()\nplt.show()"
+  },
+  {
+    "type": "markdown",
+    "source": "The trend panel reveals the slow seasonal warming/cooling envelope; the seasonal panel shows a clean 24-hour wave whose amplitude reflects the typical day-night swing; the residual panel should look noise-like with no obvious structure — if it does, the daily period captures the bulk of the cyclical variation."
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.7 Weekly seasonality on the daily series\n\nDaily aggregates remove the within-day cycle and let us probe slower rhythms. Decomposing `df_d['temperature']` with `period=7` looks for a **weekly** pattern — occupancy, HVAC schedules, or weekend/weekday differences."
+  },
+  {
+    "type": "code",
+    "source": "result_weekly = seasonal_decompose(df_d['temperature'].dropna(), model='additive', period=7)\nfig = result_weekly.plot()\nfig.set_size_inches(11, 8)\nfig.suptitle('Additive decomposition — daily temperature, period = 7 days', y=1.02)\nplt.tight_layout()\nplt.show()"
+  },
+  {
+    "type": "markdown",
+    "source": "Compared with the daily decomposition, the weekly seasonal amplitude is usually an order of magnitude smaller. If the seasonal panel shows only millikelvin-scale wiggles compared with the multi-degree daily swing, weekly seasonality is a second-order effect and we can safely model it as residual noise rather than building a separate seasonal term."
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.8 STL decomposition\n\n**STL (Seasonal-Trend decomposition using LOESS)** is a more flexible cousin of the classical method. It uses local regression instead of moving averages, so it (a) handles changing seasonal amplitudes, (b) tolerates outliers when run in `robust=True` mode, and (c) does not require the seasonal period to divide the series length. We apply it on the hourly series with `period=24`."
+  },
+  {
+    "type": "code",
+    "source": "from statsmodels.tsa.seasonal import STL\n\nstl = STL(df_h['temperature'].dropna(), period=24, robust=True)\nstl_result = stl.fit()\nfig = stl_result.plot()\nfig.set_size_inches(11, 8)\nfig.suptitle('STL decomposition — hourly temperature, period = 24h, robust', y=1.02)\nplt.tight_layout()\nplt.show()"
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.9 Spectral analysis (Welch periodogram)\n\nThe time-domain plots show seasonality but cannot quantify *which frequencies* carry the most energy. A periodogram answers that. We use Welch's method (averaged windowed FFTs) on the mean-removed temperature series, with `fs = 1/3600` Hz so the frequency axis comes out in cycles per second. Multiplying by 86400 converts to **cycles per day**, which is the natural unit for indoor climate.\n\nExpected peaks: a strong one at 1 cycle/day (24h period), a smaller harmonic near 2 cycles/day (12h), and possibly a faint feature near 1/7 cycles/day (weekly)."
+  },
+  {
+    "type": "code",
+    "source": "from scipy.signal import welch\n\nx = df_h['temperature'].dropna().values\nx = x - x.mean()\n\nfs = 1.0 / 3600.0  # samples per second (one sample per hour)\nfreqs, power = welch(x, fs=fs, nperseg=min(len(x), 24 * 60))  # ~60-day windows\n\nfreqs_per_day = freqs * 86400.0\n\n# Find dominant period (ignore the DC bin)\nmask = freqs_per_day > 0\ndominant_idx = np.argmax(power[mask])\ndominant_cpd = freqs_per_day[mask][dominant_idx]\ndominant_period_h = 24.0 / dominant_cpd if dominant_cpd > 0 else np.inf\n\nfig, ax = plt.subplots(figsize=(11, 4))\nax.semilogx(freqs_per_day[mask], power[mask], color='tab:red')\nax.axvline(1.0, color='grey', linestyle='--', linewidth=0.8, label='1 cycle/day (24h)')\nax.axvline(2.0, color='grey', linestyle=':',  linewidth=0.8, label='2 cycles/day (12h)')\nax.axvline(1/7, color='grey', linestyle='-.', linewidth=0.8, label='1/7 cycles/day (weekly)')\nax.set_xlabel('Frequency (cycles per day)')\nax.set_ylabel('Power spectral density')\nax.set_title(f'Welch periodogram — hourly temperature (dominant period ≈ {dominant_period_h:.1f} h)')\nax.legend()\nplt.tight_layout()\nplt.show()\n\nprint(f'Dominant frequency: {dominant_cpd:.3f} cycles/day  ->  period ≈ {dominant_period_h:.2f} h')"
+  },
+  {
+    "type": "markdown",
+    "source": "If the dominant peak lands at 1 cycle/day the daily cycle is the strongest single mode in the data — exactly what physical intuition predicts. A secondary peak at 2 cycles/day indicates that the daily wave is not a perfect sinusoid (its second harmonic carries non-trivial energy), which justifies modelling the seasonality with Fourier terms or STL rather than a single sine."
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.10 Cross-correlation: temperature vs humidity\n\nIndoor relative humidity depends on temperature through the saturation vapour pressure (Clausius–Clapeyron). When temperature rises but absolute moisture content stays roughly fixed, RH falls — so we expect a strong **negative** instantaneous correlation, and possibly a small lag if the humidity sensor responds more slowly than the temperature sensor. The cross-correlation function (CCF) at lags ±48 hours quantifies both the sign and any lead/lag relationship."
+  },
+  {
+    "type": "code",
+    "source": "from statsmodels.tsa.stattools import ccf\n\nt = df_h['temperature'].dropna()\nh = df_h['humidity'].dropna()\ncommon = t.index.intersection(h.index)\nt = t.loc[common].values\nh = h.loc[common].values\n\nmax_lag = 48\n\n# CCF for positive lags: corr(t, h shifted by +k)\nccf_pos = ccf(t, h, adjusted=False)[:max_lag + 1]\n# CCF for negative lags: swap series\nccf_neg = ccf(h, t, adjusted=False)[1:max_lag + 1][::-1]\n\nlags = np.arange(-max_lag, max_lag + 1)\ncc = np.concatenate([ccf_neg, ccf_pos])\n\nfig, ax = plt.subplots(figsize=(11, 4))\nax.stem(lags, cc, basefmt=' ')\nax.axhline(0, color='black', linewidth=0.6)\nci = 1.96 / np.sqrt(len(t))\nax.axhspan(-ci, ci, color='grey', alpha=0.2, label='95% CI under H0')\nax.set_xlabel('Lag (hours)  —  positive = humidity leads temperature')\nax.set_ylabel('Cross-correlation')\nax.set_title('Cross-correlation: temperature vs humidity, ±48h')\nax.legend()\nplt.tight_layout()\nplt.show()\n\nprint(f'CCF at lag 0:  {cc[max_lag]:+.3f}')\nprint(f'Peak |CCF|:    {np.max(np.abs(cc)):.3f}  at lag {lags[np.argmax(np.abs(cc))]} h')"
+  },
+  {
+    "type": "markdown",
+    "source": "A strongly negative CCF near lag 0 confirms the inverse relationship. If the peak |CCF| sits at a small positive lag, humidity reacts a few hours **after** temperature — consistent with the slower response of the moisture field to a warming room. That phase information is useful: a humidity forecaster can draw on lagged temperature as an exogenous regressor."
+  },
+  {
+    "type": "markdown",
+    "source": "### 4.11 Findings summary\n\n- **Stationarity.** Hourly temperature and humidity behave as *weakly stationary cyclostationary* series — the long-run mean and variance are stable, but a strong deterministic 24-hour cycle dominates the second-order structure. ADF rejects the unit root; KPSS is borderline because of the slow seasonal trend.\n- **Trend.** No meaningful long-run drift over the recorded span. Differencing (`d = 1`) is not required and adds noise without removing structure.\n- **Daily seasonality.** Both classical and STL decompositions extract a clean 24-hour cycle that accounts for the bulk of the variance. The Welch periodogram confirms 1 cycle/day as the dominant frequency, with a secondary harmonic at 12 hours.\n- **Weekly seasonality.** Present but second-order — amplitude an order of magnitude smaller than the daily cycle.\n- **Memory.** ACF / PACF on temperature point to short AR memory (lag-1 dominant) plus a strong seasonal AR component at lag 24. Suggested starting orders: **SARIMA(1, 0, 1) × (1, 0, 1, 24)**.\n- **Cross-coupling.** Humidity is strongly anti-correlated with temperature near lag 0 and lags it by a few hours — a vector model (VAR) or a univariate model with temperature as an exogenous regressor is justified for humidity forecasting.\n- **Recommended modelling path.** (1) SARIMA on hourly temperature as a baseline; (2) STL + ARIMA on the residual for a robust alternative; (3) a VAR(p) or LSTM with multivariate input to exploit the temperature→humidity lead/lag.\n- **Forecast horizon.** Given a strong, stable daily cycle and limited longer-term drift, short-horizon (up to 72 h) forecasts should be highly accurate; longer horizons are limited by external factors not captured in the sensor stream (weather, occupancy, HVAC schedule)."
+  }
+]

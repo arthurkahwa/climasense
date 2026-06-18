@@ -1,0 +1,93 @@
+<h2>⌚ Watch · Widgets · Live Activity</h2>
+<p class="subtitle">The glanceable surfaces — all rendered from the shared last-known cache. Tell me what to adjust in the terminal.</p>
+
+<style>
+  .wrap{color:#e6edf3;font:12px/1.4 -apple-system,Segoe UI,sans-serif;}
+  .g{color:#2ea043;}.am{color:#d29922;}.gb{background:#2ea043;}.ab{background:#d29922;}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+  .grid{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start;}
+  .cap{color:#8b949e;font-size:10px;text-transform:uppercase;letter-spacing:.05em;margin:0 0 6px;}
+  /* watch */
+  .watch{width:140px;height:172px;background:#000;border:6px solid #1c1c1e;border-radius:34px;padding:12px;text-align:center;}
+  .watch .big{font-size:38px;font-weight:800;line-height:1;margin-top:6px;}
+  .ring{width:64px;height:64px;border-radius:50%;border:6px solid #2ea043;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;margin:0 auto;}
+  .ring.am{border-color:#d29922;}
+  /* generic card */
+  .card2{background:#161b22;border:1px solid #30363d;border-radius:14px;padding:10px;}
+  .lbl{color:#8b949e;font-size:9px;text-transform:uppercase;letter-spacing:.05em;}
+  .small{width:108px;height:108px;}
+  .med{width:228px;height:108px;}
+  .v{font-weight:800;line-height:1;}
+  /* lock widgets */
+  .lockcirc{width:64px;height:64px;border-radius:50%;border:5px solid #2ea043;display:flex;align-items:center;justify-content:center;font-weight:800;background:#0d1117;}
+  .lockrect{background:#0d1117;border:1px solid #30363d;border-radius:10px;padding:8px 10px;width:200px;}
+  /* dynamic island */
+  .island{background:#000;border-radius:22px;padding:8px 14px;display:inline-flex;align-items:center;gap:10px;font-weight:700;}
+  .islandX{background:#000;border-radius:26px;padding:14px;width:300px;}
+  .la{background:#0d1117;border:1px solid #30363d;border-left:4px solid #d29922;border-radius:12px;padding:10px 12px;width:300px;}
+</style>
+
+<div class="wrap">
+
+  <p class="cap">Apple Watch — app &amp; complications</p>
+  <div class="grid" style="margin-bottom:20px;">
+    <div>
+      <div class="watch">
+        <div class="lbl">Serverraum</div>
+        <div class="big g">21°</div>
+        <div class="g" style="font-size:12px;">Normal</div>
+        <div style="margin-top:8px;font-size:12px;">Feuchte 47 %</div>
+        <div style="color:#8b949e;font-size:10px;margin-top:8px;">vor 4 Min · ✓</div>
+      </div>
+      <div class="cap" style="margin-top:6px;text-align:center;">App</div>
+    </div>
+    <div style="text-align:center;">
+      <div class="ring">21°</div>
+      <div class="cap" style="margin-top:6px;">Circular</div>
+    </div>
+    <div style="text-align:center;">
+      <div class="card2" style="padding:6px 10px;"><span class="dot gb"></span> 21° · Normal</div>
+      <div class="cap" style="margin-top:6px;">Inline / corner</div>
+    </div>
+  </div>
+
+  <p class="cap">Home Screen widgets</p>
+  <div class="grid" style="margin-bottom:20px;">
+    <div>
+      <div class="card2 small"><div class="lbl">ClimaSense</div><div class="v g" style="font-size:30px;margin:4px 0;">21°</div><div class="g" style="font-size:11px;">Normal · 47 %</div><div style="color:#8b949e;font-size:9px;margin-top:6px;">vor 4 Min</div></div>
+      <div class="cap" style="margin-top:6px;text-align:center;">Small</div>
+    </div>
+    <div>
+      <div class="card2 med" style="display:flex;gap:10px;">
+        <div style="flex:1;"><div class="lbl">Serverraum</div><div class="v g" style="font-size:28px;">21° <span style="font-size:13px;color:#e6edf3;">/ 47 %</span></div><div class="g" style="font-size:10px;">Normal · vor 4 Min</div></div>
+        <div style="flex:1;align-self:center;"><svg viewBox="0 0 100 44" width="100%" height="44"><polyline points="0,24 16,26 32,22 48,28 64,23 80,26 100,21" fill="none" stroke="#2ea043" stroke-width="2"/><polyline points="0,34 16,33 32,36 48,31 64,34 80,32 100,35" fill="none" stroke="#58a6ff" stroke-width="2" opacity=".8"/></svg></div>
+      </div>
+      <div class="cap" style="margin-top:6px;text-align:center;">Medium</div>
+    </div>
+  </div>
+
+  <p class="cap">Lock Screen widgets</p>
+  <div class="grid" style="margin-bottom:20px;align-items:center;">
+    <div style="text-align:center;"><div class="lockcirc g">21°</div><div class="cap" style="margin-top:6px;">Circular</div></div>
+    <div><div class="lockrect"><div class="lbl">Serverraum</div><div><b class="g">21° · 47 %</b> <span class="g">Normal</span></div></div><div class="cap" style="margin-top:6px;">Rectangular</div></div>
+    <div><div class="card2" style="padding:5px 9px;"><span class="dot gb"></span> ClimaSense 21° Normal</div><div class="cap" style="margin-top:6px;">Inline</div></div>
+  </div>
+
+  <p class="cap">Live Activity — only during an active breach (Temperatur in „Zulässig“)</p>
+  <div class="grid" style="align-items:center;">
+    <div style="text-align:center;"><div class="island"><span class="dot ab"></span><span class="am">29°</span></div><div class="cap" style="margin-top:6px;">Dynamic Island · compact</div></div>
+    <div>
+      <div class="islandX">
+        <div style="display:flex;justify-content:space-between;align-items:center;"><span class="am" style="font-weight:800;">⚠︎ Temperatur · Zulässig</span><span class="am" style="font-size:24px;font-weight:800;">29°</span></div>
+        <div style="color:#8b949e;font-size:11px;margin-top:4px;">seit 13:00 · laufend · Δ 11,6 °C zur Kondensation</div>
+        <div style="height:4px;background:#d29922;border-radius:2px;margin-top:8px;opacity:.7;"></div>
+      </div>
+      <div class="cap" style="margin-top:6px;text-align:center;">Dynamic Island · expanded</div>
+    </div>
+    <div>
+      <div class="la"><div class="am" style="font-weight:700;">⚠︎ Temperatur Zulässig seit 13:00 (laufend)</div><div style="color:#8b949e;font-size:11px;margin-top:3px;">29° · Feuchte 51 % · aktualisiert vor 1 Min</div></div>
+      <div class="cap" style="margin-top:6px;text-align:center;">Lock Screen Live Activity</div>
+    </div>
+  </div>
+
+</div>

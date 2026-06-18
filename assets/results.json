@@ -1,0 +1,9 @@
+{
+  "tables": {},
+  "stdouts": {
+    "stationarity": "--- Hourly temperature (n=90239) ---\n  ADF   stat=  -9.517  p=3.134e-16  -> stationary\n  KPSS  stat=   4.473  p=0.01  -> non-stationary\n\n--- Hourly humidity (n=90239) ---\n  ADF   stat=  -4.980  p=2.427e-05  -> stationary\n  KPSS  stat=   4.890  p=0.01  -> non-stationary\n\n",
+    "data_summary": "After dedup: 2,450,920 rows\nCoverage: 2016-01-20 18:40:30  \u2192  2026-05-07 16:15:02.270000  (3,759 days)\n",
+    "forecast_results": "                            MAE   RMSE   MAPE  sMAPE\nmodel                                               \nRolling 24h mean          0.248  0.320  1.314  1.313\nHolt-Winters (add, m=24)  0.247  0.346  1.314  1.310\nNaive (last value)        0.217  0.370  1.164  1.153\nSeasonal naive (lag-24h)  0.307  0.433  1.627  1.626\nSARIMA(1,0,1)(1,0,1,24)   0.344  0.442  1.836  1.814\nARIMA(2,0,2)              0.571  0.649  3.005  3.063\n",
+    "sequence_results": "                           model       MAE      RMSE\n0       Linear regression (lags)  0.214410  0.293336\n1     Gradient boosting (1-step)  0.215482  0.304549\n2                           LSTM  0.247722  0.313796\n3                         Conv1D  0.265760  0.339734\n4  Gradient boosting (recursive)  0.522476  0.596496\n"
+  }
+}

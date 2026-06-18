@@ -1,0 +1,18 @@
+@page
+@{ ViewData["Title"] = "Analyse"; }
+<h1>Analyse</h1>
+<div class="ranges">
+  <button data-r="24h">24 Std</button><button data-r="7d" class="active">7 T</button><button data-r="30d">30 T</button>
+</div>
+<div class="panel"><h3 title="Taupunkt aus Temperatur und Luftfeuchtigkeit; geringer Abstand = Kondensationsgefahr">Taupunkt &amp; Kondensation</h3><div id="psy" class="muted">—</div></div>
+<div class="panel">
+  <h3 title="Lineare Trend-Fortschreibung der nächsten Intervalle (Temperatur &amp; Feuchte)">Prognose</h3>
+  <div class="chart-wrap"><canvas id="forecastChart"></canvas></div>
+  <div id="forecastNote" class="muted" style="display:none">—</div>
+</div>
+<div class="panel"><h3>Temperatur</h3><div id="tempInsight"></div></div>
+<div class="panel"><h3>Luftfeuchtigkeit</h3><div id="humInsight"></div></div>
+@section Scripts {
+  <script src="~/js/charts.js" asp-append-version="true"></script>
+  <script src="~/js/insights.js" asp-append-version="true"></script>
+}

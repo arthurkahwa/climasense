@@ -1,0 +1,93 @@
+<h2>📐 iPad — its own dashboard</h2>
+<p class="subtitle">Two tailored directions (landscape). Same band language as the iPhone. Click to choose.</p>
+
+<style>
+  .pad { background:#0d1117; border:8px solid #21262d; border-radius:20px; color:#e6edf3;
+         font:12px/1.4 -apple-system,Segoe UI,sans-serif; width:600px; max-width:100%; box-shadow:0 8px 30px rgba(0,0,0,.4); }
+  .g{color:#2ea043;} .am{color:#d29922;} .rd{color:#f85149;}
+  .gb{background:#2ea043;} .dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+  .panel{background:#161b22;border:1px solid #30363d;border-radius:12px;padding:10px;}
+  .lbl{color:#8b949e;font-size:9px;text-transform:uppercase;letter-spacing:.05em;}
+  .alert{background:#161b22;border:1px solid #30363d;border-left:3px solid #2ea043;border-radius:8px;padding:6px 8px;font-size:11px;margin-top:6px;}
+  /* sidebar layout */
+  .lay{display:flex;min-height:360px;}
+  .side{width:120px;border-right:1px solid #30363d;padding:12px 10px;}
+  .side .brand{font-weight:800;font-size:14px;margin-bottom:14px;}
+  .nav{display:block;color:#8b949e;padding:7px 8px;border-radius:8px;margin-bottom:2px;}
+  .nav.on{background:rgba(46,160,67,.15);color:#2ea043;font-weight:700;}
+  .main{flex:1;padding:12px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;grid-auto-rows:min-content;}
+  .v{font-size:34px;font-weight:800;line-height:1;}
+  /* kiosk layout */
+  .kios{padding:14px;}
+  .ktop{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
+  .hero3{display:flex;gap:12px;margin-bottom:10px;}
+  .hcard{flex:1;border-radius:14px;padding:14px;text-align:center;border:1px solid #2ea043;background:linear-gradient(180deg,rgba(46,160,67,.16),rgba(46,160,67,.03));}
+  .hcard .big{font-size:48px;font-weight:800;line-height:1;}
+  .heat{display:grid;grid-template-columns:repeat(20,1fr);gap:2px;}
+  .cell{aspect-ratio:1;border-radius:2px;background:#2ea043;opacity:.55;}
+</style>
+
+<div class="cards">
+  <!-- Sidebar app -->
+  <div class="card" data-choice="sidebar" onclick="toggleSelect(this)" style="grid-column:1/-1;">
+    <div class="card-image" style="display:flex;justify-content:center;padding:16px;background:#0a0c10;">
+      <div class="pad">
+        <div class="lay">
+          <div class="side">
+            <div class="brand">ClimaSense</div>
+            <span class="nav on">● Live</span>
+            <span class="nav">Verlauf</span>
+            <span class="nav">Analyse</span>
+            <div style="margin-top:14px;font-size:10px;"><span class="dot gb"></span> verbunden</div>
+          </div>
+          <div class="main">
+            <div class="panel"><div class="lbl">Temperatur</div><div class="v g">21°</div><div class="g" style="font-size:11px;">Normal</div></div>
+            <div class="panel"><div class="lbl">Feuchte</div><div class="v g">47%</div><div class="g" style="font-size:11px;">Normal</div></div>
+            <div class="panel"><div class="lbl">Taupunkt</div><div class="v">9,4°</div><div style="font-size:11px;color:#8b949e;">Δ 11,6 °C</div></div>
+            <div class="panel" style="grid-column:1/3;">
+              <div class="lbl">24 Std · Temp &amp; Feuchte (Min–Max)</div>
+              <svg viewBox="0 0 320 90" width="100%" height="90">
+                <path d="M0,40 L320,40" stroke="#30363d" stroke-width="1"/>
+                <polygon points="0,34 40,36 80,30 120,38 160,31 200,35 240,28 280,33 320,30 320,46 280,49 240,44 200,51 160,47 120,54 80,46 40,52 0,50" fill="rgba(46,160,67,.15)"/>
+                <polyline points="0,40 40,42 80,38 120,46 160,40 200,44 240,36 280,41 320,38" fill="none" stroke="#2ea043" stroke-width="2"/>
+                <polyline points="0,64 40,62 80,66 120,60 160,63 200,61 240,67 280,62 320,64" fill="none" stroke="#58a6ff" stroke-width="2" opacity=".8"/>
+              </svg>
+            </div>
+            <div class="panel"><div class="lbl">Aktive Warnungen</div><div class="alert">✓ Keine</div><div class="lbl" style="margin-top:8px;">Prognose</div><div style="font-size:11px;">21,0 → 20,8 °C</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>1 · Sidebar app</h3><p>Left nav (Live · Verlauf · Analyse) like the web; main area is a rich multi-card grid. Familiar, drill-in friendly, great for interactive use.</p></div>
+  </div>
+
+  <!-- Kiosk / wall display -->
+  <div class="card" data-choice="kiosk" onclick="toggleSelect(this)" style="grid-column:1/-1;">
+    <div class="card-image" style="display:flex;justify-content:center;padding:16px;background:#0a0c10;">
+      <div class="pad">
+        <div class="kios">
+          <div class="ktop"><div style="font-weight:800;font-size:15px;">ClimaSense · Serverraum</div><div style="font-size:11px;color:#8b949e;">aktualisiert vor 4 Min <span class="dot gb"></span></div></div>
+          <div class="hero3">
+            <div class="hcard"><div class="lbl g">Temperatur · Normal</div><div class="big g">21°</div></div>
+            <div class="hcard"><div class="lbl g">Feuchte · Normal</div><div class="big g">47%</div></div>
+            <div class="hcard" style="border-color:#30363d;background:#161b22;"><div class="lbl">Taupunkt / Abstand</div><div class="big">9,4°</div><div style="font-size:11px;color:#8b949e;">Δ 11,6 °C zur Kondensation</div></div>
+          </div>
+          <div class="panel" style="margin-bottom:10px;">
+            <div class="lbl">7 Tage · Trend</div>
+            <svg viewBox="0 0 560 80" width="100%" height="80">
+              <polyline points="0,40 70,42 140,36 210,44 280,38 350,42 420,34 490,40 560,37" fill="none" stroke="#2ea043" stroke-width="2"/>
+              <polyline points="0,58 70,56 140,60 210,54 280,57 350,55 420,61 490,56 560,58" fill="none" stroke="#58a6ff" stroke-width="2" opacity=".8"/>
+            </svg>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <div class="panel" style="flex:2;"><div class="lbl">30 Tage · Heatmap</div><div class="heat" style="margin-top:6px;">
+              <div class="cell"></div><div class="cell"></div><div class="cell" style="background:#d29922"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div><div class="cell"></div>
+            </div></div>
+            <div class="panel" style="flex:1;"><div class="lbl">Status</div><div class="alert">✓ Keine Warnungen</div><div class="lbl" style="margin-top:6px;">Prognose 6×</div><div style="font-size:11px;">21,0 → 20,8 °C</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body"><h3>2 · Wall display (kiosk)</h3><p>No nav — everything on one screen, glanceable from across the room. Huge band-coloured readouts, trend, 30-day heatmap, forecast. A real mounted room display + a striking portfolio shot.</p></div>
+  </div>
+</div>

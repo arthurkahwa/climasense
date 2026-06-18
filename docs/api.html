@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ClimaSense Monitor API &mdash; Referenz</title>
+  <meta name="description" content="Interaktive Referenz für die API des ClimaSense USV-Raum-Umgebungsmonitors (OpenAPI 3.0)." />
+  <!-- inline favicon to avoid a 404 when opened from file:// -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='14' font-size='14'%3E%F0%9F%8C%A1%EF%B8%8F%3C/text%3E%3C/svg%3E" />
+  <style>
+    html, body { background: #ffffff; }
+    body { margin: 0; padding: 0; color: #1f2328; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    #fallback {
+      display: none; max-width: 40rem; margin: 4rem auto; padding: 0 1.5rem;
+      color: #24292f; line-height: 1.6;
+    }
+    #fallback h1 { font-size: 1.4rem; }
+    #fallback code { background: #f0f0f4; padding: 0.1em 0.35em; border-radius: 4px; }
+    #fallback a { color: #512BD4; }
+    #loading {
+      display: flex; align-items: center; justify-content: center;
+      height: 100vh; color: #6e7781; font-size: 1.05rem;
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">ClimaSense API-Referenz wird geladen&hellip;</div>
+  <div id="redoc"></div>
+
+  <div id="fallback">
+    <h1>&#127777;&#65039; ClimaSense Monitor API</h1>
+    <p>
+      Die interaktive Darstellung konnte nicht geladen werden (sie benötigt die
+      Redoc- und js-yaml-Bundles von einem CDN, daher ist beim ersten Mal eine
+      Internetverbindung erforderlich).
+    </p>
+    <p>Sie können die Spezifikation dennoch direkt einsehen:</p>
+    <ul>
+      <li>Die Rohspezifikation: <a href="../openapi.yaml">openapi.yaml</a></li>
+      <li>
+        Fügen Sie diese Datei für eine interaktive Ansicht in den
+        <a href="https://editor.swagger.io/" target="_blank" rel="noopener">Swagger Editor</a>
+        ein.
+      </li>
+    </ul>
+  </div>
+
+  <!-- The spec is embedded verbatim; do not edit here. Regenerate with scripts/build-api-html.py -->
+  <script id="openapi-spec" type="application/yaml">
+openapi: 3.0.3
+
+info:
+  title: ClimaSense Monitor API
+  version: "1.0.0"
+  summary: Schreibgeschützte (nur lesende) JSON-API über einen Temperatur- und Luftfeuchtigkeits-Datenfeed eines USV-Raums.
+  description: |
+    Der **ClimaSense Monitor** macht aus einer einzigen, simplen SQL-Server-Tabelle —
+    `ups3.dbo.tbl_sensor_data`, die nichts enthält außer einem Zeitstempel, einer
+    ganzgradigen Temperatur und einer ganzprozentigen Luftfeuchtigkeit — eine
+    Live-Betriebs-API für einen einzelnen Geräteraum. Jeder Endpunkt **liest, schreibt
+    niemals**; es gibt keinen Erfassungs-Job und keine Schema-Hoheit.
+
+    Dieses Dokument ist der Vertrag. Fügen Sie es in den
+    [Swagger Editor](https://editor.swagger.io/) ein, rendern Sie es mit
+    [Redoc](https://redocly.github.io/redoc/), oder öffnen Sie die mitgelieferte
+    **[`docs/api.html`](./docs/api.html)** für eine interaktive Browser-Ansicht.
+
+    ## Zeitzone — bitte zuerst lesen
+    Jedes Feld, dessen Name auf `Cet` endet (sowie `SensorReading.timestamp`), ist ein
+    Wert in **CET-Ortszeit (Wanduhrzeit)** (`Europe/Berlin`, mit Sommerzeit) **ohne
+    UTC-Offset** — genau die Basis der Quellspalte. Ein Wert von
+    `2026-06-15T22:45:00` bedeutet 22:45 *in Berlin*. Die Abfrageparameter-Grenzen
+    `from` / `to` werden ebenso interpretiert. Behandeln Sie diese als lokal-naive
+    Zeitstempel; hängen Sie **kein** `Z` an und wenden Sie keinen Offset an.
+
+    ## Auswahl eines Zeitraums
+    Zeitreihe / Tageswerte / Bereichsüberschreitungen / Warnungen / Insights
+    akzeptieren **entweder** ein `range`-Preset **oder** ein explizites Paar aus
+    `from` + `to` — niemals beides. Der Server wählt daraus automatisch ein
+    Aggregationsintervall passend zur Zeitraumbreite, damit Diagramme von 24 Stunden bis
+    zur vollen ~10-jährigen Historie schlank bleiben:
+
+    | Zeitraumbreite    | Aggregationsintervall |
+    | ----------------- | --------------------- |
+    | ≤ 2 Tage          | 15 Minuten            |
+    | ≤ 14 Tage         | 60 Minuten            |
+    | ≤ 90 Tage         | 6 Stunden             |
+    | ≤ 2 Jahre         | 1 Tag                 |
+    | ≤ 5 Jahre         | 1 Woche               |
+    | > 5 Jahre         | ~1 Monat              |
+
+    Ein **benutzerdefinierter `from`/`to`-Zeitraum ist auf 2 Jahre (732 Tage)
+    begrenzt**; die breiteren Presets (`2y`, `5y`, `all`) umgehen diese Grenze.
+    `GET /api/readings/raw` liefert bis ~**210 Tage** jeden einzelnen Messwert und
+    **min/max-dezimiert** darüber hinaus (zwei aufgezeichnete Extremwerte je Intervall),
+    da nicht-aggregierte Daten sonst Millionen von Punkten ergäben.
+
+    ## Klimahüllkurve (zulässiger Bereich) (ASHRAE TC 9.9 Rechenzentrumsklasse, konfigurierbar)
+    Messwerte werden anhand dieser Klimahüllkurve als `Recommended` / `Allowable` /
+    `OutOfRange` klassifiziert (Standardwerte angezeigt; über den Konfigurationsabschnitt
+    `Envelope` überschreibbar):
+
+    | Größe            | Recommended | Allowable |
+    | ---------------- | ----------- | --------- |
+    | Temperatur       | 18–27 °C    | 15–32 °C  |
+    | Luftfeuchtigkeit | 20–80 %RH   | 8–90 %RH  |
+
+    Ein Datenfeed gilt als **veraltet**, sobald der neueste Messwert älter ist als
+    `FreshnessMinutes` (Standard **30** Min ≈ zwei verpasste 15-Minuten-Intervalle).
+
+    ## Konventionen
+    - **Enums werden als Namen serialisiert**, nicht als Zahlen: `"Recommended"`,
+      `"Breach"`, `"Rising"`, `"Temperature"`.
+    - **Deutsche Meldungen.** `Alert.message` ist menschenlesbares Deutsch; alles
+      Übrige (Feldnamen, Enum-Werte) ist Englisch.
+    - **Zahlen sind JSON-Zahlen** (Dezimalpunkt) auf dem Draht. Die deutsche
+      `de-DE`-Kommaformatierung (`8,0 °C`) ist eine Angelegenheit der UI, nicht der API.
+    - **Keine Authentifizierung.** Die API ist nicht authentifiziert und schreibgeschützt
+      (nur lesend); betreiben Sie sie hinter Netzwerkkontrollen (sie ist für eine interne
+      IIS-Site vorgesehen).
+
+    ## Fehler
+    | Status | Wann | Body |
+    | ------ | ---- | ---- |
+    | `400`  | Ungültige Zeitraum-Eingabe (unbekanntes Preset, `from ≥ to`, fehlende Grenzen, über einer Grenze) | `{ "error": "…" }` |
+    | `503`  | Sensordatenbank nicht erreichbar oder Zeitüberschreitung | Problem-Objekt in RFC-9457-Form |
+
+    Ein `503` wird nur bei echten Datenbankfehlern ausgelöst
+    (`SqlException` / `DbException` / `TimeoutException`); Stacktraces gelangen niemals
+    nach außen. Ein *veralteter Datenfeed* ist **kein** Fehler — diese Endpunkte liefern
+    weiterhin `200`; die Veraltung zeigt sich über `LatestStatus.isStale` und eine
+    `StaleFeed`-Warnung.
+  contact:
+    name: ClimaSense (arthurkahwa)
+    url: https://github.com/arthurkahwa/climasense
+  license:
+    name: MIT
+    url: https://github.com/arthurkahwa/climasense/blob/main/LICENSE
+
+externalDocs:
+  description: Projekt-README, Architekturdiagramme und das Data-Science-Notebook.
+  url: https://github.com/arthurkahwa/climasense#readme
+
+servers:
+  - url: http://localhost:5181
+    description: Lokale Entwicklung (Kestrel — `dotnet run`)
+  - url: https://climasense.lab.local
+    description: Produktion (IIS, in-process ANCM) — exemplarischer Hostname
+
+tags:
+  - name: Readings
+    description: Live-Status, aggregierte Zeitreihen, Tageswerte-Rollups, Bereichsüberschreitungen und Rohwerte.
+  - name: Analytics
+    description: Ausgewertete Warnungen und statistische Insights (Drift, Sensorzustand, Prognose, Psychrometrie).
+  - name: Ops
+    description: Betriebliche Zustandsprüfung (Health-Check).
+
+paths:
+  /api/readings/latest:
+    get:
+      tags: [Readings]
+      summary: Aktuellster Messwert mit Band-Klassifizierung und Aktualität
+      description: |
+        Die einzelne neueste Zeile, mit jeder Größe gegen die Klimahüllkurve
+        klassifiziert, dem **Schlechtesten** der beiden als Gesamtstatus, dem Alter
+        des Messwerts in ganzen Minuten und einem Flag für veralteten Datenfeed.
+
+        Liefert `null` (weiterhin **HTTP 200**), wenn die Tabelle leer ist. Dies ist
+        der Endpunkt, den die Live-Seite alle 60 s abfragt.
+      operationId: getLatest
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: curl -s http://localhost:5181/api/readings/latest
+        - lang: JavaScript
+          label: fetch
+          source: |
+            const r = await fetch("/api/readings/latest");
+            const status = await r.json();   // LatestStatus | null
+      responses:
+        "200":
+          description: Aktuellster Status, oder `null`, wenn keine Daten vorhanden sind.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/LatestStatus"
+                  - type: "null"
+              examples:
+                normal:
+                  summary: Frischer Messwert, beide Größen im Band Recommended
+                  value:
+                    reading: { id: 3069301, timestamp: "2026-06-15T22:45:00", temperatureC: 21, humidityPct: 47 }
+                    tempBand: Recommended
+                    humidityBand: Recommended
+                    overall: Recommended
+                    minutesOld: 4
+                    isStale: false
+                allowable:
+                  summary: Temperatur im Band Allowable (28–32 °C) — Gesamtstatus folgt der schlechtesten Größe
+                  value:
+                    reading: { id: 3069344, timestamp: "2026-06-15T22:45:00", temperatureC: 29, humidityPct: 51 }
+                    tempBand: Allowable
+                    humidityBand: Recommended
+                    overall: Allowable
+                    minutesOld: 3
+                    isStale: false
+                outOfRange:
+                  summary: Temperatur über der Obergrenze von Allowable (> 32 °C)
+                  value:
+                    reading: { id: 3069402, timestamp: "2026-06-15T22:45:00", temperatureC: 34, humidityPct: 58 }
+                    tempBand: OutOfRange
+                    humidityBand: Recommended
+                    overall: OutOfRange
+                    minutesOld: 2
+                    isStale: false
+                stale:
+                  summary: Datenfeed liefert nicht mehr (älter als FreshnessMinutes)
+                  value:
+                    reading: { id: 3068990, timestamp: "2026-06-15T21:30:00", temperatureC: 21, humidityPct: 47 }
+                    tempBand: Recommended
+                    humidityBand: Recommended
+                    overall: Recommended
+                    minutesOld: 79
+                    isStale: true
+                empty:
+                  summary: Tabelle ist leer
+                  value: null
+        "503":
+          $ref: "#/components/responses/DbUnavailable"
+
+  /api/readings/series:
+    get:
+      tags: [Readings]
+      summary: Aggregierte avg/min/max-Zeitreihe
+      description: |
+        Mittelwert, Minimum und Maximum von Temperatur und Luftfeuchtigkeit je
+        Zeitfenster, von alt nach neu sortiert. Die Breite des Aggregationsintervalls
+        skaliert automatisch mit dem Zeitraum (siehe die Tabelle in der
+        API-Beschreibung). Dies speist die Trenddiagramme und ihre Min–Max-Hüllkurvenbänder.
+      operationId: getSeries
+      x-codeSamples:
+        - lang: curl
+          label: Bereich-Preset
+          source: curl -s "http://localhost:5181/api/readings/series?range=7d"
+        - lang: curl
+          label: expliziter Zeitraum
+          source: curl -s "http://localhost:5181/api/readings/series?from=2026-06-01T00:00:00&to=2026-06-08T00:00:00"
+      parameters:
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Sortierte Zeitreihenpunkte (kann ein leeres Array sein).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SeriesPoint" }
+              examples:
+                hourly:
+                  summary: range=7d → 60-Minuten-Zeitfenster
+                  value:
+                    - { bucketStartCet: "2026-06-15T21:00:00", avgTemp: 21.2, minTemp: 21, maxTemp: 22, avgHumidity: 47.4, minHumidity: 46, maxHumidity: 49, count: 4 }
+                    - { bucketStartCet: "2026-06-15T22:00:00", avgTemp: 21.0, minTemp: 20, maxTemp: 21, avgHumidity: 47.0, minHumidity: 46, maxHumidity: 48, count: 4 }
+                empty:
+                  summary: Keine Messwerte im Zeitraum
+                  value: []
+        "400":
+          $ref: "#/components/responses/BadRange"
+        "503":
+          $ref: "#/components/responses/DbUnavailable"
+
+  /api/readings/daily:
+    get:
+      tags: [Readings]
+      summary: Tageswerte (Kalender-Heatmap)
+      description: |
+        Eine Zeile pro Kalendertag (CET) mit avg/min/max für beide Größen — die
+        Daten hinter der Kalender-Heatmap der History-Seite (jede Zelle nach
+        `avgTemp` eingefärbt). Von alt nach neu sortiert.
+      operationId: getDaily
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: curl -s "http://localhost:5181/api/readings/daily?range=30d"
+      parameters:
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Tageswerte-Aggregate (kann ein leeres Array sein).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/DailyAggregate" }
+              examples:
+                month:
+                  summary: range=30d → zwei von dreißig Tagen
+                  value:
+                    - { dateCet: "2026-06-13", avgTemp: 21.0, minTemp: 19, maxTemp: 23, avgHumidity: 47.6, minHumidity: 43, maxHumidity: 53, count: 96 }
+                    - { dateCet: "2026-06-14", avgTemp: 21.3, minTemp: 20, maxTemp: 23, avgHumidity: 48.1, minHumidity: 44, maxHumidity: 52, count: 96 }
+                empty:
+                  summary: Keine Messwerte im Zeitraum
+                  value: []
+        "400":
+          $ref: "#/components/responses/BadRange"
+        "503":
+          $ref: "#/components/responses/DbUnavailable"
+
+  /api/readings/excursions:
+    get:
+      tags: [Readings]
+      summary: Zusammenhängende Läufe außerhalb des Bands
+      description: |
+        Maximale zusammenhängende Spannen, in denen eine Größe das Band
+        **Recommended** verlassen hat, ausgewertet über die (aggregierte) Zeitreihe.
+        Jede Bereichsüberschreitung trägt ihren Spitzenwert (den Messwert, der am
+        weitesten vom Band Recommended entfernt ist) sowie das schlechteste erreichte
+        Band. **Neueste zuerst.**
+      operationId: getExcursions
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: curl -s "http://localhost:5181/api/readings/excursions?range=30d"
+      parameters:
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Bereichsüberschreitungen, neueste zuerst (kann ein leeres Array sein).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Excursion" }
+              examples:
+                mixed:
+                  summary: Ein Temperaturlauf in Allowable und ein kurzer Feuchtelauf
+                  value:
+                    - { metric: Temperature, startCet: "2026-06-10T13:00:00", endCet: "2026-06-10T16:00:00", durationMinutes: 180, peak: 28.5, band: Allowable }
+                    - { metric: Humidity, startCet: "2026-06-08T02:00:00", endCet: "2026-06-08T03:00:00", durationMinutes: 60, peak: 82.0, band: Allowable }
+                clean:
+                  summary: Alles blieb im Band Recommended
+                  value: []
+        "400":
+          $ref: "#/components/responses/BadRange"
+        "503":
+          $ref: "#/components/responses/DbUnavailable"
+
+  /api/readings/raw:
+    get:
+      tags: [Readings]
+      summary: Tatsächliche (nicht gemittelte) Messwerte
+      description: |
+        Messwerte für den Diagrammmodus „tatsächliche Werte" (die Live-Seite und der
+        **Messwerte**-Umschalter der History-Seite). Von alt nach neu sortiert.
+
+        **Funktioniert für jeden Zeitraum.** Bis ~**210 Tage** wird jeder einzelne
+        Messwert zurückgegeben (harte Grenze 25 000 Punkte). Bei breiteren Zeiträumen
+        wird **min/max-dezimiert**: pro serverseitigem Aggregationsintervall zwei
+        *tatsächlich aufgezeichnete* Messwerte — das Minimum und das Maximum — sodass
+        reale Extremwerte erhalten bleiben und das Ergebnis nur wenige hundert Punkte
+        umfasst.
+      operationId: getRaw
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: curl -s "http://localhost:5181/api/readings/raw?range=24h"
+      parameters:
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Tatsächliche Messwerte, älteste zuerst (kann ein leeres Array sein).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RawPoint" }
+              examples:
+                readings:
+                  summary: Schmaler Zeitraum — einzelne Messwerte (Hinweis - die Subsekundenpräzision kann variieren)
+                  value:
+                    - { timestampCet: "2026-06-15T10:15:04.497", temperatureC: 17, humidityPct: 49 }
+                    - { timestampCet: "2026-06-15T10:30:04", temperatureC: 18, humidityPct: 53 }
+                envelope:
+                  summary: Breiter Zeitraum (z. B. range=1y) — min/max-dezimiert, zwei Messwerte je Intervall
+                  value:
+                    - { timestampCet: "2025-06-16T00:00:00", temperatureC: 19, humidityPct: 42 }
+                    - { timestampCet: "2025-06-16T12:00:00", temperatureC: 19, humidityPct: 43 }
+        "400":
+          $ref: "#/components/responses/BadRange"
+        "503":
+          $ref: "#/components/responses/DbUnavailable"
+
+  /api/alerts:
+    get:
+      tags: [Analytics]
+      summary: Ausgewertete Warnungen über den Zeitraum
+      description: |
+        Sechs Arten von Warnung, ausgewertet über den Zeitraum — `Breach`, `StaleFeed`,
+        `Anomaly`, `Sensor`, `Forecast`, `Condensation`. `endCet == null` kennzeichnet
+        eine **aktive** (laufende) Warnung; ein gesetztes `endCet` kennzeichnet eine
+        behobene. Meldungen sind auf Deutsch. **Neueste zuerst.**
+
+        - **Breach** — eine Größe hat das Band Recommended verlassen (Schweregrad = das
+          schlechteste erreichte Band: `Allowable` oder `OutOfRange`).
+        - **StaleFeed** — neuester Messwert älter als `FreshnessMinutes`.
+        - **Anomaly** — ein statistisch ungewöhnlicher Punkt (|z| > 2.5), der *noch
+          im Band* liegt (Punkte außerhalb des Bands sind bereits ein Breach) — eine
+          Frühwarnung.
+        - **Sensor** — ein unplausibler Sprung (`SensorStatus.Spike`).
+        - **Forecast** — der lineare Trend erreicht die Obergrenze von Recommended
+          innerhalb von ~12 Intervallen (≈ 3 h bei der 15-Min-Taktung).
+        - **Condensation** — der aktuellste Messwert liegt innerhalb von 3 °C zu seinem
+          Taupunkt.
+      operationId: getAlerts
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: curl -s "http://localhost:5181/api/alerts?range=24h"
+      parameters:
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Warnungen, neueste zuerst (kann ein leeres Array sein).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Alert" }
+              examples:
+                several:
+                  summary: Ein aktiver Breach, eine Kondensationswarnung und eine behobene Anomalie
+                  value:
+                    - { kind: Breach, metric: Temperature, startCet: "2026-06-10T13:00:00", endCet: null, severity: Allowable, message: "Temperatur Zulässig seit 13:00 (laufend)" }
+                    - { kind: Condensation, metric: null, startCet: "2026-06-15T22:45:00", endCet: null, severity: Allowable, message: "Kondensationsrisiko: 2,4 °C über Taupunkt" }
+                    - { kind: Anomaly, metric: Humidity, startCet: "2026-06-15T18:00:00", endCet: "2026-06-15T18:00:00", severity: Allowable, message: "Feuchte Anomalie 58 (z 2,7) um 18:00" }
+                staleAndForecast:
+                  summary: Ein veralteter Datenfeed plus eine Prognose-Frühwarnung
+                  value:
+                    - { kind: StaleFeed, metric: null, startCet: "2026-06-15T21:30:00", endCet: null, severity: OutOfRange, message: "Datenfeed veraltet seit 21:30 (79 Min)" }
+                    - { kind: Forecast, metric: Temperature, startCet: "2026-06-15T21:00:00", endCet: null, severity: Allowable, message: "Temperatur steigt auf 27 in ~9 Intervallen" }
+                quiet:
+                  summary: Nichts zu melden
+                  value: []
+        "400":
+          $ref: "#/components/responses/BadRange"
+        "503":
+          $ref: "#/components/responses/DbUnavailable"
+
+  /api/insights:
+    get:
+      tags: [Analytics]
+      summary: Psychrometrie + Analytik je Größe
+      description: |
+        Eine zusammengesetzte Analytik-Ansicht für den Zeitraum:
+
+        - **Je Größe** (`temperature`, `humidity`): Driftrichtung (Mittelwert der
+          jüngeren Hälfte vs. ältere Hälfte), statistische Anomalien (|z| > 2.5),
+          ein Sensorzustand-Urteil, eine `forecast` aus 6 Schritten linearen Trends und
+          `stepsToBreach` (Intervalle, bis der Trend die Obergrenze von Recommended
+          erreicht, oder `null`, wenn er nicht darauf zusteuert).
+        - **Psychrometrie** aus dem aktuellsten Messwert: `dewPointC` nach der
+          Magnus-Formel und `condensationMarginC` (°C Abstand über dem Taupunkt).
+
+        Liefert `null` (weiterhin **HTTP 200**), wenn keine Daten vorhanden sind.
+      operationId: getInsights
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: curl -s "http://localhost:5181/api/insights?range=7d"
+      parameters:
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Insights, oder `null`, wenn keine Daten vorhanden sind.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Insights"
+                  - type: "null"
+              examples:
+                stable:
+                  summary: Eine ruhige Woche — stabile Temperatur, leicht steigende Luftfeuchtigkeit
+                  value:
+                    temperature:
+                      metric: Temperature
+                      drift: Stable
+                      anomalies: []
+                      sensorHealth: Healthy
+                      forecast: [21.0, 21.0, 20.9, 20.9, 20.8, 20.8]
+                      stepsToBreach: null
+                    humidity:
+                      metric: Humidity
+                      drift: Rising
+                      anomalies:
+                        - { bucketStartCet: "2026-06-15T18:00:00", value: 58.0, score: 2.7 }
+                      sensorHealth: Healthy
+                      forecast: [47.0, 47.4, 47.8, 48.2, 48.6, 49.0]
+                      stepsToBreach: null
+                    dewPointC: 9.4
+                    condensationMarginC: 11.6
+                trendingToBreach:
+                  summary: Temperatur steigt — stepsToBreach ist befüllt
+                  value:
+                    temperature:
+                      metric: Temperature
+                      drift: Rising
+                      anomalies: []
+                      sensorHealth: Healthy
+                      forecast: [25.8, 26.0, 26.2, 26.4, 26.6, 26.8]
+                      stepsToBreach: 6
+                    humidity:
+                      metric: Humidity
+                      drift: Stable
+                      anomalies: []
+                      sensorHealth: Healthy
+                      forecast: [50.0, 50.0, 50.0, 50.0, 50.0, 50.0]
+                      stepsToBreach: null
+                    dewPointC: 14.1
+                    condensationMarginC: 11.7
+                empty:
+                  summary: Tabelle ist leer
+                  value: null
+        "400":
+          $ref: "#/components/responses/BadRange"
+        "503":
+          $ref: "#/components/responses/DbUnavailable"
+
+  /health:
+    get:
+      tags: [Ops]
+      summary: Zustandsprüfung (DB-Konnektivität + Aktualität des Datenfeeds)
+      description: |
+        ASP.NET Core Health-Check, Klartext-Body. Er ruft den aktuellsten Status ab
+        und meldet:
+
+        | Body       | HTTP | Bedeutung |
+        | ---------- | ---- | --------- |
+        | `Healthy`  | 200  | Datenbank erreichbar **und** Datenfeed frisch |
+        | `Degraded` | 200  | Datenbank erreichbar, aber Datenfeed **veraltet**, oder Tabelle leer |
+        | `Unhealthy`| 503  | Datenbankfehler / nicht erreichbar |
+
+        > **Hinweis:** `Degraded` liefert **200**, nicht 503 — dieser Endpunkt nutzt die
+        > Standard-Statuscode-Zuordnung des Frameworks (`Healthy`/`Degraded` → 200,
+        > `Unhealthy` → 503). Liveness-/Readiness-Probes, die bei einem veralteten
+        > Datenfeed fehlschlagen müssen, sollten den Body prüfen, nicht nur den
+        > Statuscode.
+      operationId: getHealth
+      x-codeSamples:
+        - lang: curl
+          label: curl
+          source: curl -s -o /dev/null -w "%{http_code} " http://localhost:5181/health && curl -s http://localhost:5181/health
+      responses:
+        "200":
+          description: Healthy oder Degraded (siehe die Tabelle oben).
+          content:
+            text/plain:
+              schema:
+                type: string
+                enum: [Healthy, Degraded]
+              examples:
+                healthy: { summary: Alles in Ordnung, value: Healthy }
+                degraded: { summary: Datenfeed veraltet oder keine Zeilen, value: Degraded }
+        "503":
+          description: Unhealthy — die Sensordatenbank konnte nicht erreicht werden.
+          content:
+            text/plain:
+              schema:
+                type: string
+                enum: [Unhealthy]
+              example: Unhealthy
+
+components:
+  parameters:
+    Range:
+      name: range
+      in: query
+      required: false
+      description: |
+        Voreingestellter Zeitraum, gemessen rückwärts von „jetzt" (CET). **Schließt sich
+        gegenseitig aus** mit `from`/`to` — geben Sie das eine oder das andere an. Werden
+        sowohl `range` als auch `from`/`to` angegeben, gewinnt `range`. `raw` dezimiert
+        Zeiträume über ~210 Tage min/max, statt sie abzulehnen.
+      schema:
+        type: string
+        enum: [24h, 7d, 30d, 90d, 1y, 2y, 5y, all]
+      examples:
+        week: { summary: Letzte 7 Tage, value: 7d }
+        everything: { summary: Gesamter Datenbestand (seit 2016), value: all }
+    From:
+      name: from
+      in: query
+      required: false
+      description: |
+        Inklusiver Start eines benutzerdefinierten Zeitraums, **CET-Ortszeit
+        (Wanduhrzeit), ohne Zeitzonen-Offset**. Muss mit `to` gepaart und *anstelle von*
+        `range` verwendet werden. Der benutzerdefinierte Zeitraum (`to − from`) darf
+        2 Jahre (732 Tage) nicht überschreiten.
+      schema:
+        type: string
+        format: date-time
+      example: "2026-06-01T00:00:00"
+    To:
+      name: to
+      in: query
+      required: false
+      description: |
+        Exklusives Ende eines benutzerdefinierten Zeitraums, **CET-Ortszeit
+        (Wanduhrzeit), ohne Zeitzonen-Offset**. Muss mit `from` gepaart und strikt
+        danach liegen.
+      schema:
+        type: string
+        format: date-time
+      example: "2026-06-08T00:00:00"
+
+  responses:
+    BadRange:
+      description: |
+        Ungültige Zeitraum-Eingabe. Der Body ist `{ "error": "<Grund>" }`. Mögliche
+        Gründe: ein unbekanntes Preset, eine fehlende Grenze, `from ≥ to`, oder ein
+        benutzerdefinierter Zeitraum über der 2-Jahres-Grenze.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/RangeError" }
+          examples:
+            unknownPreset:
+              summary: range ist keines der bekannten Presets
+              value: { error: "unknown range '6m'" }
+            missingBounds:
+              summary: Weder ein Preset noch ein vollständiges from/to-Paar wurde angegeben
+              value: { error: "provide 'range' or both 'from' and 'to'" }
+            fromAfterTo:
+              summary: from liegt nicht vor to
+              value: { error: "'from' must be before 'to'" }
+            tooWide:
+              summary: Benutzerdefinierter Zeitraum überschreitet die 2-Jahres-Grenze
+              value: { error: "range exceeds 2 years" }
+    DbUnavailable:
+      description: |
+        Die Sensordatenbank ist nicht erreichbar oder es kam zu einer Zeitüberschreitung.
+        Der Body ist ein Problem-Objekt in RFC-9457-Form, serialisiert als
+        `application/json` (`type`/`instance` können `null` sein). Es gelangen keine
+        Stacktraces nach außen.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ProblemDetails" }
+          example:
+            type: null
+            title: "Data temporarily unavailable"
+            status: 503
+            detail: "The sensor database could not be reached. Please retry shortly."
+            instance: null
+
+  schemas:
+    ReadingBand:
+      type: string
+      description: |
+        Klassifizierung eines einzelnen Werts anhand der Klimahüllkurve. Das
+        **Schlechteste** der beiden Größen eines Messwerts bestimmt dessen Gesamtstatus.
+        Die drei Bänder entsprechen diesen deutschen UI-Bezeichnungen: `Recommended` = „Normal",
+        `Allowable` = „Zulässig", `OutOfRange` = „Kritisch".
+        - `Recommended` — innerhalb des empfohlenen Bands (T 18–27 °C, RH 20–80 %).
+        - `Allowable` — außerhalb des empfohlenen, aber innerhalb des zulässigen (T 15–32 °C, RH 8–90 %).
+        - `OutOfRange` — außerhalb des zulässigen Bands.
+      enum: [Recommended, Allowable, OutOfRange]
+      example: Recommended
+
+    Metric:
+      type: string
+      description: Welche Umgebungsgröße ein Datensatz betrifft.
+      enum: [Temperature, Humidity]
+      example: Temperature
+
+    AlertKind:
+      type: string
+      description: |
+        Kategorie einer ausgewerteten Warnung.
+        - `Breach` — Größe hat das Band Recommended verlassen.
+        - `StaleFeed` — keine frischen Messwerte.
+        - `Anomaly` — statistischer Ausreißer im Band (Frühwarnung).
+        - `Sensor` — unplausibler Sprung (wahrscheinlich Sensorfehler).
+        - `Forecast` — Trend projiziert, die Obergrenze bald zu erreichen.
+        - `Condensation` — Taupunkt nahe der Lufttemperatur.
+      enum: [Breach, StaleFeed, Anomaly, Sensor, Forecast, Condensation]
+      example: Breach
+
+    DriftDirection:
+      type: string
+      description: Richtung der Mittelwertverschiebung jüngere Hälfte vs. ältere Hälfte über den Zeitraum.
+      enum: [Rising, Falling, Stable]
+      example: Stable
+
+    SensorStatus:
+      type: string
+      description: |
+        Urteil zum Sensorzustand.
+        - `Healthy` — normale Schwankung.
+        - `Stuck` — eingefrorene Linie (festsitzender Sensor).
+        - `Spike` — unplausibler Sprung (Ausreißer).
+      enum: [Healthy, Stuck, Spike]
+      example: Healthy
+
+    SensorReading:
+      type: object
+      description: Eine Rohzeile aus `ups3.dbo.tbl_sensor_data`.
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Primärschlüssel der Quellzeile.
+          example: 3069301
+        timestamp:
+          type: string
+          format: date-time
+          description: CET-Ortszeit (Wanduhrzeit), ohne Zeitzonen-Offset.
+          example: "2026-06-15T22:45:00"
+        temperatureC:
+          type: integer
+          format: int32
+          description: Ganze Grad Celsius, wie gespeichert.
+          example: 21
+        humidityPct:
+          type: integer
+          format: int32
+          description: Ganze Prozent relative Luftfeuchtigkeit, wie gespeichert.
+          example: 47
+      required: [id, timestamp, temperatureC, humidityPct]
+
+    LatestStatus:
+      type: object
+      description: Der aktuellste Messwert plus seine Band-Einordnung und Aktualität.
+      properties:
+        reading: { $ref: "#/components/schemas/SensorReading" }
+        tempBand: { $ref: "#/components/schemas/ReadingBand" }
+        humidityBand: { $ref: "#/components/schemas/ReadingBand" }
+        overall:
+          allOf: [{ $ref: "#/components/schemas/ReadingBand" }]
+          description: Das Schlechteste aus `tempBand` und `humidityBand`.
+        minutesOld:
+          type: integer
+          format: int32
+          description: Ganze Minuten zwischen dem Zeitstempel des Messwerts und „jetzt".
+          example: 4
+        isStale:
+          type: boolean
+          description: True, sobald `minutesOld` `FreshnessMinutes` (Standard 30) überschreitet.
+          example: false
+      required: [reading, tempBand, humidityBand, overall, minutesOld, isStale]
+
+    SeriesPoint:
+      type: object
+      description: Aggregate beider Größen über ein automatisch dimensioniertes Zeitfenster.
+      properties:
+        bucketStartCet:
+          type: string
+          format: date-time
+          description: Inklusiver Start des Zeitfensters (CET, ohne Offset).
+          example: "2026-06-15T21:00:00"
+        avgTemp: { type: number, format: double, description: Mittlere Temperatur im Zeitfenster (°C)., example: 21.2 }
+        minTemp: { type: integer, format: int32, example: 21 }
+        maxTemp: { type: integer, format: int32, example: 22 }
+        avgHumidity: { type: number, format: double, description: Mittlere Luftfeuchtigkeit im Zeitfenster (%RH)., example: 47.4 }
+        minHumidity: { type: integer, format: int32, example: 46 }
+        maxHumidity: { type: integer, format: int32, example: 49 }
+        count:
+          type: integer
+          format: int32
+          description: Anzahl der Rohzeilen, die in das Zeitfenster fielen.
+          example: 4
+      required: [bucketStartCet, avgTemp, minTemp, maxTemp, avgHumidity, minHumidity, maxHumidity, count]
+
+    DailyAggregate:
+      type: object
+      description: Avg/min/max beider Größen über einen Kalendertag (CET).
+      properties:
+        dateCet:
+          type: string
+          format: date
+          description: Kalendertag in CET (nur Datum).
+          example: "2026-06-14"
+        avgTemp: { type: number, format: double, example: 21.3 }
+        minTemp: { type: integer, format: int32, example: 20 }
+        maxTemp: { type: integer, format: int32, example: 23 }
+        avgHumidity: { type: number, format: double, example: 48.1 }
+        minHumidity: { type: integer, format: int32, example: 44 }
+        maxHumidity: { type: integer, format: int32, example: 52 }
+        count:
+          type: integer
+          format: int32
+          description: Rohzeilen an dem Tag (~96 bei der 15-Min-Taktung).
+          example: 96
+      required: [dateCet, avgTemp, minTemp, maxTemp, avgHumidity, minHumidity, maxHumidity, count]
+
+    RawPoint:
+      type: object
+      description: Ein einzelner nicht-aggregierter Messwert, projiziert für den Diagrammmodus „tatsächliche Werte".
+      properties:
+        timestampCet:
+          type: string
+          format: date-time
+          description: CET-Ortszeit (Wanduhrzeit), ohne Zeitzonen-Offset (Subsekundenpräzision kann vorhanden sein).
+          example: "2026-06-15T10:15:04.497"
+        temperatureC: { type: integer, format: int32, example: 17 }
+        humidityPct: { type: integer, format: int32, example: 49 }
+      required: [timestampCet, temperatureC, humidityPct]
+
+    Excursion:
+      type: object
+      description: Ein maximaler zusammenhängender Lauf, in dem eine Größe das Band Recommended verlassen hat.
+      properties:
+        metric: { $ref: "#/components/schemas/Metric" }
+        startCet:
+          type: string
+          format: date-time
+          description: Start des Laufs (erstes Zeitfenster außerhalb des Bands).
+          example: "2026-06-10T13:00:00"
+        endCet:
+          type: string
+          format: date-time
+          description: Ende des Laufs (erstes Zeitfenster zurück im Band, d. h. exklusive Grenze).
+          example: "2026-06-10T16:00:00"
+        durationMinutes:
+          type: integer
+          format: int32
+          description: Lauflänge in Minuten (`endCet − startCet`).
+          example: 180
+        peak:
+          type: number
+          format: double
+          description: Der Wert, der während des Laufs am weitesten vom Band Recommended entfernt ist.
+          example: 28.5
+        band:
+          allOf: [{ $ref: "#/components/schemas/ReadingBand" }]
+          description: Schlechtestes während des Laufs erreichtes Band (`Allowable` oder `OutOfRange`).
+      required: [metric, startCet, endCet, durationMinutes, peak, band]
+
+    Alert:
+      type: object
+      description: Eine ausgewertete Warnung. `endCet == null` bedeutet, dass sie noch aktiv ist.
+      properties:
+        kind: { $ref: "#/components/schemas/AlertKind" }
+        metric:
+          description: Betroffene Größe, oder `null` für Datenfeed-/Kondensationswarnungen.
+          oneOf:
+            - $ref: "#/components/schemas/Metric"
+            - type: "null"
+        startCet:
+          type: string
+          format: date-time
+          description: Wann die Bedingung begann.
+          example: "2026-06-10T13:00:00"
+        endCet:
+          description: Wann die Bedingung endete, oder `null`, solange noch aktiv.
+          oneOf:
+            - { type: string, format: date-time }
+            - type: "null"
+        severity:
+          allOf: [{ $ref: "#/components/schemas/ReadingBand" }]
+          description: Schweregrad der Warnung, der die Band-Skala wiederverwendet (`Allowable` / `OutOfRange`).
+        message:
+          type: string
+          description: Menschenlesbare deutsche Meldung.
+          example: "Temperatur Zulässig seit 13:00 (laufend)"
+      required: [kind, startCet, severity, message]
+
+    AnomalyPoint:
+      type: object
+      description: Ein statistisch ungewöhnliches Zeitfenster, vom Drift-Detektor gekennzeichnet (|z| > 2.5).
+      properties:
+        bucketStartCet:
+          type: string
+          format: date-time
+          example: "2026-06-15T18:00:00"
+        value:
+          type: number
+          format: double
+          description: Der Durchschnittswert des Zeitfensters für die Größe.
+          example: 58.0
+        score:
+          type: number
+          format: double
+          description: Vorzeichenbehafteter z-Wert — Standardabweichungen vom Mittelwert des Zeitraums.
+          example: 2.7
+      required: [bucketStartCet, value, score]
+
+    MetricInsight:
+      type: object
+      description: Analytik für eine einzelne Größe über den Zeitraum.
+      properties:
+        metric:
+          type: string
+          description: "`Temperature` oder `Humidity` (String-Bezeichnung)."
+          example: Temperature
+        drift: { $ref: "#/components/schemas/DriftDirection" }
+        anomalies:
+          type: array
+          description: Statistische Ausreißer innerhalb des Zeitraums (kann leer sein).
+          items: { $ref: "#/components/schemas/AnomalyPoint" }
+        sensorHealth: { $ref: "#/components/schemas/SensorStatus" }
+        forecast:
+          type: array
+          description: Die nächsten 6 aus dem linearen Trend projizierten Werte, in Einheiten der Größe.
+          items: { type: number, format: double }
+          example: [21.0, 21.0, 20.9, 20.9, 20.8, 20.8]
+        stepsToBreach:
+          description: |
+            Anzahl der Intervalle, bis der Trend die obere Grenze von Recommended
+            erreicht, oder `null`, wenn er nicht auf die Grenze zusteuert.
+          oneOf:
+            - { type: integer, format: int32 }
+            - type: "null"
+      required: [metric, drift, anomalies, sensorHealth, forecast]
+
+    Insights:
+      type: object
+      description: Zusammengesetzte Analytik-Ansicht — Analyse je Größe plus Psychrometrie.
+      properties:
+        temperature: { $ref: "#/components/schemas/MetricInsight" }
+        humidity: { $ref: "#/components/schemas/MetricInsight" }
+        dewPointC:
+          type: number
+          format: double
+          description: Taupunkt des aktuellsten Messwerts nach der Magnus-Formel (°C).
+          example: 9.4
+        condensationMarginC:
+          type: number
+          format: double
+          description: °C Abstand über dem Taupunkt (`temperatureC − dewPointC`); klein ⇒ Kondensationsrisiko.
+          example: 11.6
+      required: [temperature, humidity, dewPointC, condensationMarginC]
+
+    RangeError:
+      type: object
+      description: Die `400`-Fehlerhülle, die bei ungültiger Zeitraum-Eingabe zurückgegeben wird.
+      properties:
+        error:
+          type: string
+          description: Kurzer Grund, auf Englisch.
+          example: "'from' must be before 'to'"
+      required: [error]
+
+    ProblemDetails:
+      type: object
+      description: RFC-9457-Problemdetails (Teilmenge, die der DB-Exception-Handler ausgibt).
+      properties:
+        type:
+          type: string
+          nullable: true
+          description: Problem-Typ-URI; hier `null`.
+        title:
+          type: string
+          example: "Data temporarily unavailable"
+        status:
+          type: integer
+          format: int32
+          example: 503
+        detail:
+          type: string
+          example: "The sensor database could not be reached. Please retry shortly."
+        instance:
+          type: string
+          nullable: true
+          description: URI des konkreten Vorkommens; hier `null`.
+
+  </script>
+
+  <!-- Pinned versions + Subresource Integrity: the browser refuses to run a bundle
+       whose hash does not match, so a compromised CDN cannot inject code here. -->
+  <script
+    src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"
+    integrity="sha384-+pxiN6T7yvpryuJmE1gM9PX7yQit15auDb+ZwwvJOd/4be2Cie5/IuVXgQb/S9du"
+    crossorigin="anonymous"></script>
+  <script
+    src="https://cdn.jsdelivr.net/npm/redoc@2.5.3/bundles/redoc.standalone.js"
+    integrity="sha384-xiEssMQFSpSfLbzRZCGfxxIM5QDb2DTrU6vyoZdp2sV1L6pmOMy6MpTtUoLbpC96"
+    crossorigin="anonymous"></script>
+  <script>
+    (function () {
+      var loading = document.getElementById('loading');
+      function showFallback() {
+        if (loading) loading.style.display = 'none';
+        document.getElementById('redoc').style.display = 'none';
+        document.getElementById('fallback').style.display = 'block';
+      }
+      try {
+        if (!window.jsyaml || !window.Redoc) { showFallback(); return; }
+        var text = document.getElementById('openapi-spec').textContent;
+        var spec = window.jsyaml.load(text);
+        window.Redoc.init(
+          spec,
+          {
+            theme: {
+              colors: {
+                primary: { main: '#5b3fd6' },
+                text: { primary: '#1f2328', secondary: '#57606a' },
+                http: { get: '#1a7f37', post: '#0550ae', delete: '#cf222e', put: '#9a6700' }
+              },
+              typography: {
+                fontSize: '15px',
+                lineHeight: '1.6',
+                fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
+                headings: { fontFamily: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif', fontWeight: '600' },
+                links: { color: '#0550ae', visited: '#0550ae', hover: '#033d8a' },
+                code: { fontSize: '13px', color: '#0550ae', backgroundColor: '#eff1f3' }
+              },
+              sidebar: { backgroundColor: '#f6f8fa', textColor: '#1f2328', activeTextColor: '#5b3fd6' },
+              rightPanel: { backgroundColor: '#0d1117', textColor: '#e6edf3' }
+            },
+            hideDownloadButton: false,
+            downloadFileName: 'climasense-openapi.yaml',
+            expandResponses: '200',
+            jsonSampleExpandLevel: 4,
+            requiredPropsFirst: true,
+            pathInMiddlePanel: true,
+            hideHostname: false
+          },
+          document.getElementById('redoc'),
+          function (err) {
+            if (err) { console.error(err); showFallback(); }
+            else if (loading) { loading.style.display = 'none'; }
+          }
+        );
+      } catch (e) {
+        console.error(e);
+        showFallback();
+      }
+    })();
+  </script>
+</body>
+</html>

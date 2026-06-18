@@ -1,0 +1,87 @@
+<h2>🖥️ Mac — menu-bar + dashboard window</h2>
+<p class="subtitle">An always-visible status in the menu bar, click-through to a full native window. Tell me what to tweak in the terminal.</p>
+
+<style>
+  .desk{position:relative;width:640px;max-width:100%;height:430px;background:radial-gradient(120% 120% at 70% 0%,#1b2330,#0a0c10);
+        border-radius:12px;overflow:hidden;color:#e6edf3;font:12px/1.4 -apple-system,Segoe UI,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.4);}
+  .g{color:#2ea043;} .gb{background:#2ea043;} .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+  .mbar{position:absolute;top:0;left:0;right:0;height:24px;background:rgba(20,24,31,.85);backdrop-filter:blur(6px);
+        display:flex;align-items:center;justify-content:flex-end;gap:14px;padding:0 12px;font-size:11px;color:#cdd6df;border-bottom:1px solid #ffffff14;}
+  .mbar .cs{font-weight:700;color:#fff;}
+  .win{position:absolute;left:22px;top:54px;width:480px;height:340px;background:#0d1117;border:1px solid #30363d;border-radius:12px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.5);}
+  .title{height:30px;background:#161b22;border-bottom:1px solid #30363d;display:flex;align-items:center;gap:8px;padding:0 10px;}
+  .tl{width:11px;height:11px;border-radius:50%;} .red{background:#ff5f57} .yel{background:#febc2e} .grn{background:#28c840}
+  .wtitle{font-weight:700;margin-left:6px;} .toolbar{margin-left:auto;display:flex;gap:5px;}
+  .chip{background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:2px 7px;font-size:10px;color:#8b949e;}
+  .chip.on{border-color:#2ea043;color:#2ea043;}
+  .body{display:flex;height:calc(100% - 30px);}
+  .sb{width:120px;border-right:1px solid #30363d;padding:10px 8px;}
+  .nav{display:block;color:#8b949e;padding:6px 8px;border-radius:7px;margin-bottom:2px;font-size:11px;}
+  .nav.on{background:rgba(46,160,67,.15);color:#2ea043;font-weight:700;}
+  .content{flex:1;padding:10px;}
+  .row{display:flex;gap:8px;margin-bottom:8px;}
+  .tile{flex:1;background:#161b22;border:1px solid #30363d;border-radius:10px;padding:8px;}
+  .lbl{color:#8b949e;font-size:9px;text-transform:uppercase;letter-spacing:.05em;}
+  .v{font-size:26px;font-weight:800;line-height:1;}
+  .pop{position:absolute;top:26px;right:8px;width:230px;background:#161b22;border:1px solid #30363d;border-radius:12px;
+       box-shadow:0 14px 40px rgba(0,0,0,.6);padding:12px;}
+  .pop .arr{position:absolute;top:-6px;right:46px;width:10px;height:10px;background:#161b22;border-left:1px solid #30363d;border-top:1px solid #30363d;transform:rotate(45deg);}
+  .btn{background:#2ea043;color:#06210f;border-radius:7px;text-align:center;padding:6px;font-weight:700;font-size:11px;margin-top:8px;}
+  .alert{background:#0d1117;border:1px solid #30363d;border-left:3px solid #2ea043;border-radius:7px;padding:5px 7px;font-size:11px;margin-top:6px;}
+</style>
+
+<div class="mockup">
+  <div class="mockup-header">macOS — menu-bar item + popover + dashboard window</div>
+  <div class="mockup-body" style="display:flex;justify-content:center;padding:16px;background:#0a0c10;">
+    <div class="desk">
+      <!-- menu bar -->
+      <div class="mbar"><span>🔆</span><span>📶</span><span>🔋</span><span class="cs"><span class="dot gb"></span> 21°</span><span>🕘 21:46</span></div>
+
+      <!-- dashboard window -->
+      <div class="win">
+        <div class="title">
+          <span class="tl red"></span><span class="tl yel"></span><span class="tl grn"></span>
+          <span class="wtitle">ClimaSense — Live</span>
+          <span class="toolbar"><span class="chip on">24 Std</span><span class="chip">7 T</span><span class="chip">30 T</span><span class="chip">🌓</span></span>
+        </div>
+        <div class="body">
+          <div class="sb">
+            <div class="nav on">● Live</div><div class="nav">Verlauf</div><div class="nav">Analyse</div>
+            <div style="margin-top:12px;font-size:10px;"><span class="dot gb"></span> verbunden</div>
+          </div>
+          <div class="content">
+            <div class="row">
+              <div class="tile"><div class="lbl">Temperatur</div><div class="v g">21°</div><div class="g" style="font-size:10px;">Normal</div></div>
+              <div class="tile"><div class="lbl">Feuchte</div><div class="v g">47%</div><div class="g" style="font-size:10px;">Normal</div></div>
+              <div class="tile"><div class="lbl">Taupunkt</div><div class="v">9,4°</div><div style="font-size:10px;color:#8b949e;">Δ 11,6°</div></div>
+            </div>
+            <div class="tile" style="margin-bottom:8px;">
+              <div class="lbl">24 Std · Temp &amp; Feuchte (Min–Max)</div>
+              <svg viewBox="0 0 300 80" width="100%" height="74">
+                <polygon points="0,34 38,36 76,30 114,38 152,31 190,35 228,28 266,33 300,30 300,46 266,49 228,44 190,51 152,47 114,54 76,46 38,52 0,50" fill="rgba(46,160,67,.14)"/>
+                <polyline points="0,40 38,42 76,38 114,46 152,40 190,44 228,36 266,41 300,38" fill="none" stroke="#2ea043" stroke-width="2"/>
+                <polyline points="0,62 38,60 76,64 114,58 152,61 190,59 228,65 266,60 300,62" fill="none" stroke="#58a6ff" stroke-width="2" opacity=".8"/>
+              </svg>
+            </div>
+            <div class="lbl">Aktive Warnungen</div><div class="alert">✓ Keine — alles im Normbereich</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- menu-bar popover -->
+      <div class="pop">
+        <div class="arr"></div>
+        <div style="font-weight:700;margin-bottom:8px;">ClimaSense · Serverraum</div>
+        <div class="row" style="margin:0;">
+          <div class="tile"><div class="lbl">Temp</div><div class="v g" style="font-size:20px;">21°</div></div>
+          <div class="tile"><div class="lbl">Feuchte</div><div class="v g" style="font-size:20px;">47%</div></div>
+        </div>
+        <div style="font-size:10px;color:#8b949e;margin-top:6px;">aktualisiert vor 4 Min · verbunden</div>
+        <div class="alert">✓ Keine Warnungen</div>
+        <div class="btn">Dashboard öffnen</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle">Menu-bar item shows a band dot + temp; the popover gives a glance + “open dashboard”. Window reuses the iPad sidebar layout. What would you change — e.g. menu-bar text (dot only / 21° / 21° · 47%)?</p>
